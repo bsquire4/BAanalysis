@@ -1,0 +1,1 @@
+This is a project looking at analysing the progress of runners in Great Britain over time and looking at the factors that impact progessing, positively or negatively, the most. Using a database created by pulling data from Power of 10
