@@ -4,6 +4,7 @@ import pandas as pd
 import psycopg2
 from psycopg2 import sql
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
@@ -22,6 +23,18 @@ athleteInfo = {}
 athleteLines = {}
 athleteFigs = {}
 fit = {}
+groupLine = None
+
+
+def seconds_to_minutes_and_seconds(seconds):
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds % 60
+    if minutes > 60:
+        hours = minutes // 60
+        minutes -= hours * 60
+        return f"{hours}:{minutes}:{remaining_seconds:.0f}"
+    else:
+        return f"{minutes}:{remaining_seconds:.2f}"
 
 
 def get_data():
@@ -198,8 +211,6 @@ def create_GroupLine():
     return poly_function
 
 
-groupLine = None
-
 def calc_weight(x_in, y_in):
     poly = np.poly1d(groupLine)
     w = np.ones(x_in.shape[0])
@@ -214,72 +225,7 @@ def calc_weight(x_in, y_in):
     return w
 
 
-def calculateBestFit(x, y):
-    if len(x) > 8:
-        x_train, x_test, y_train, y_test = train_test_split(x, y, random_state=105, test_size=0.25, shuffle=True)
-
-        best_r2 = 0
-        bestLine = None
-
-        w = calc_weight(x_train, y_train)
-
-        for degree in range(1, 7):
-            # Perform polynomial regression
-
-            # creating model
-            mymodel = np.polynomial.Polynomial.fit(x_train, y_train, degree, w=w)
-            poly_function = np.poly1d(mymodel)
-            mymodelUnweighted = np.polynomial.Polynomial.fit(x_train, y_train, degree)
-            unweighted_poly_function = np.poly1d(mymodelUnweighted)
-            y_pred = mymodel(x)
-
-            # checking for overfitting
-            y_testing = mymodel(x_test)
-            r2all = r2_score(y_test, y_testing, sample_weight=calc_weight(x_test, y_test))
-            # print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2all))
-
-            # checking for outliers
-            residuals = y - y_pred
-            std_dev = np.std(residuals)
-            threshold = 2 * std_dev
-            outlier_indices = np.where(np.abs(residuals) > threshold)[0]
-            x_filtered = np.delete(x, outlier_indices)
-            y_filtered = np.delete(y, outlier_indices)
-            # print("REMOVED {} outliers".format(len(X) - len(x_filtered)))
-
-            # Modelling without outliers
-            w1 = calc_weight(x_filtered, y_filtered)
-            mynewModel = np.polyfit(x_filtered, y_filtered, degree, w=w1)
-            new_poly_function = np.poly1d(mynewModel)
-            y_pred2 = new_poly_function(x_filtered)
-            r2New = r2_score(y_filtered, y_pred2, sample_weight=calc_weight(x_filtered, y_filtered))
-            # print("R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2New))
-
-            myline = np.linspace(min(x), max(x), 100)
-            if not (np.any(new_poly_function(myline) < 0) or np.any(new_poly_function(myline) > 1400) or np.any(
-                new_poly_function(myline) > max(y))):
-                if r2New > best_r2:
-                    bestLine = mynewModel
-                    best_r2 = r2New
-
-        if best_r2 == 0:
-            return None
-        else:
-            return np.poly1d(bestLine)
-
-
-def seconds_to_minutes_and_seconds(seconds):
-    minutes = int(seconds // 60)
-    remaining_seconds = seconds % 60
-    if minutes > 60:
-        hours = minutes // 60
-        minutes -= hours * 60
-        return f"{hours}:{minutes}:{remaining_seconds:.0f}"
-    else:
-        return f"{minutes}:{remaining_seconds:.2f}"
-
-
-def create_individualGraph():
+def calcIndividual():
     for athlete_id in listOfAthletes:
         best_degree = 0
         best_r2 = 0
@@ -290,14 +236,14 @@ def create_individualGraph():
             athletedf['split'] = 'train'
             athletedf.loc[test_idx, 'split'] = 'test'
 
-            X = athletedf['age']
-            y = athletedf['wa_points']
-            X_train = athletedf.loc[train_idx]['age']
-            y_train = athletedf.loc[train_idx]['wa_points']
-            X_test = athletedf.loc[test_idx]['age']
-            y_test = athletedf.loc[test_idx]['wa_points']
+            X = athletedf['age'].values
+            y = athletedf['wa_points'].values
+            X_train = X[train_idx]
+            y_train = y[train_idx]
+            X_test = X[test_idx]
+            y_test = y[test_idx]
 
-            w = calc_weight(X_train.to_numpy(), y_train.to_numpy())
+            w = calc_weight(X_train, y_train)
 
             fig = go.Figure()
 
@@ -310,24 +256,23 @@ def create_individualGraph():
             for degree in range(1, 7):
                 # Perform polynomial regression
                 # creating model
-                mymodel = np.polynomial.Polynomial.fit(X_train.values, y_train.values, degree, w=w)
-                poly_function = np.poly1d(mymodel)
-                mymodelUnweighted = np.polynomial.Polynomial.fit(X_train.values, y_train.values, degree)
-                unweighted_poly_function = np.poly1d(mymodelUnweighted)
-                y_pred = mymodel(X.values)
+                mymodel = np.polynomial.Polynomial.fit(X_train, y_train, degree, w=w)
+                mymodelUnweighted = np.polynomial.Polynomial.fit(X_train, y_train, degree)
+                y_pred = mymodel(X)
 
                 # checking for overfitting
-                y_testing = mymodel(X_test.values)
+                y_testing = mymodel(X_test)
                 r2all = r2_score(y_test, y_testing)
-                print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2all))
+                # print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2all))
 
                 # checking for outliers
-                residuals = y.values - y_pred
+                residuals = y - y_pred
                 std_dev = np.std(residuals)
                 threshold = 3 * std_dev
-                outlier_indices = np.where(np.abs(residuals) > threshold)[0]
-                x_filtered = np.delete(X, outlier_indices)
-                y_filtered = np.delete(y, outlier_indices)
+                mask = np.abs(residuals) <= threshold  # Efficient outlier detection using boolean mask
+
+                x_filtered = X[mask]
+                y_filtered = y[mask]
                 # print("REMOVED {} outliers".format(len(X) - len(x_filtered)))
 
                 # Modelling without outliers
@@ -335,9 +280,9 @@ def create_individualGraph():
                 new_poly_function = np.poly1d(mynewModel)
                 y_pred2 = new_poly_function(x_filtered)
                 r2New = r2_score(y_filtered, y_pred2)
-                print("R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2New))
+                # print("R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2New))
                 myline = np.linspace(min(X), max(X), 100)
-                print("LINE DRAWN")
+                # print("LINE DRAWN")
                 if not (np.any(new_poly_function(myline) < 0) or np.any(new_poly_function(myline) > 1400)):
                     fig.add_trace(
                         go.Scatter(x=myline, y=new_poly_function(myline),
@@ -364,11 +309,11 @@ def create_individualGraph():
                         bestLine = mynewModel
                         best_r2 = r2New
                         best_degree = degree
-
-            print()
-            print("Best degree of polynomial:", best_degree)
-            print("Best R-squared score on test data:", best_r2)
-            print()
+            #
+            # print()
+            # print("Best degree of polynomial:", best_degree)
+            # print("Best R-squared score on test data:", best_r2)
+            # print()
 
         if best_r2 == 0:
             athleteFigs[athlete_id] = fig.to_dict()
@@ -378,126 +323,13 @@ def create_individualGraph():
             athleteLines[athlete_id] = bestLine
 
 
-def show_individualGraph(athlete_id):
-    if athlete_id in listOfAthletes:
-        athlete_dataFrame = listOfDFs[athlete_id]
-
-        x = athlete_dataFrame['age']
-        y = athlete_dataFrame['wa_points']
-
-        x_train, x_test, y_train, y_test = train_test_split(x, y, random_state=104, test_size=0.25, shuffle=True)
-
-        best_degree = 0
-        best_r2 = 0
-
-        plt.figure(figsize=(8, 6))
-
-        figs = go.Figure()
-        figs.add_trace(go.Scatter(x=x_train, y=y_train, name='training data', mode="markers"))
-        figs.add_trace(go.Scatter(x=x_test, y=y_test, name='test data', mode="markers"))
-
-        for degree in range(1, 7):
-            # Perform polynomial regression
-            with warnings.catch_warnings():
-                warnings.filterwarnings('error')
-                try:
-                    mymodel = np.polyfit(x_train, y_train, degree)
-                    poly_function = np.poly1d(mymodel)
-                    y_pred = poly_function(x)
-
-                    r2all = r2_score(y, y_pred)
-                    print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2all))
-
-                    residuals = y - y_pred
-
-                    # Compute the standard deviation of the residuals
-                    std_dev = np.std(residuals)
-
-                    # A common criterion: outliers are points where the residual is more than 3 standard deviations away
-                    threshold = 3 * std_dev
-                    outlier_indices = np.where(np.abs(residuals) > threshold)[0]
-
-                    x_filtered = np.delete(x, outlier_indices)
-                    y_filtered = np.delete(y, outlier_indices)
-
-                    print("REMOVED {} outliers".format(len(x) - len(x_filtered)))
-
-                    coeffs_refined = np.polyfit(x_filtered, y_filtered, degree)
-                    poly_func_refined = np.poly1d(coeffs_refined)
-
-                    y_pred2 = poly_func_refined(x_filtered)
-                    r2inliers = r2_score(y_filtered, y_pred2)
-                    print(
-                        "R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2inliers))
-
-                    r2 = 0.9 * r2inliers + 0.1 * r2all
-                    firstderiv = poly_function.deriv()
-                    roots = firstderiv.roots
-                    secondderiv = firstderiv.deriv()
-                    # Filter for minima
-                    minima = []
-                    for root in roots:
-                        if secondderiv(root) > 0:  # Positive second derivative -> minimum
-                            minima.append((root, poly_function(root)))
-
-                    # Find the minimum point (if any)
-                    min_point = (1, 1)
-                    max_point = (1, 1)
-                    if minima:
-                        min_point = min(minima, key=lambda x: x[1])  # Minimize by y-value
-
-                    maxima = []
-                    for root in roots:
-                        if secondderiv(root) < 0:  # Negative second derivative -> maximum
-                            maxima.append((root, poly_function(root)))
-
-                    # Find the maximum point (if any)
-                    if maxima:
-                        max_point = max(maxima, key=lambda x: x[1])  # Maximize by y-value
-
-                    try:
-                        if int(min_point[1]) > 0 and int(max_point[1]) < 1400 and int(max_point[1]) < max(y):
-                            myline = np.linspace(min(x), max(x), 100)
-                            plt.plot(myline, poly_function(myline), label='Degree {}'.format(degree))
-
-                            # mycontinuedline = np.linspace(max(x), mdates.date2num(datetime.today()) - 1970,100)
-                            # plt.plot(mdates.num2date(mycontinuedline), poly_function(mycontinuedline), label=str(athlete_id) + " prediction", linestyle='dashed')
-
-                            if r2 > best_r2:
-                                best_r2 = r2
-                                best_degree = degree
-                    except:
-                        print("IMAGINARY !!")
-                except np.RankWarning:
-                    print("not enough data")
-
-            # Calculate R-squared score on test set
-
-        figs.show()
-        # Add labels and title
-        plt.xlabel('Age')
-        plt.gca().set_ybound(0, 1400)
-
-        plt.ylabel('WA Points')
-        plt.title('Polynomial Regression Analysis')
-        plt.legend()
-
-        # Show plot
-        print()
-        print("Best degree of polynomial:", best_degree)
-        print("Best R-squared score on test data:", best_r2)
-        print()
-        plt.grid(True)
-        plt.show()
-
-    fig = plt.figure()
-    linesPerYear = []
-
-
 def create_groupGraph():
     print("MAKING GROUP GRAPH")
     fig = go.Figure()
     highestAge = 2024
+    colors = plt.get_cmap('tab20c').colors
+    color_list = [mcolors.rgb2hex(c) for c in colors]
+    counter = 0
     for athlete_id in listOfAthletes:
         athlete_dataFrame = listOfDFs[athlete_id]
 
@@ -508,43 +340,15 @@ def create_groupGraph():
         poly_function = athleteLines[athlete_id]
         myLine = np.linspace(min(x), max(x), 100)
 
+
         athlete_name = str(athleteInfo[athlete_id]['firstname'] + " " + athleteInfo[athlete_id]['lastname'])
         if poly_function is not None:
             poly_function = np.poly1d(poly_function)
             fig.add_trace(
                 go.Scatter(x=myLine, y=poly_function(myLine), name=athlete_name, customdata=[athlete_id] * len(myLine),
-                           marker=dict(color='blue'), zorder=0))
+                           marker=dict(color=color_list[counter % len(color_list)]), zorder=0))
+            counter += 1
             print("LINE WRITTEN")
-
-    return fig
-
-
-def show_GroupLine():
-    fig = go.Figure()
-    x = []
-    y = []
-    counter = 0
-    for athletes in listOfAthletes:
-        counter = counter + 1
-        athleteDF = listOfDFs[athletes]
-
-        for age in athleteDF['age'].values:
-            x.append(age)
-
-        for wa_points in athleteDF['wa_points'].values:
-            y.append(wa_points)
-
-        # can end loop here if no need to visualise line creation
-
-        poly_function = np.poly1d(calculateGroupBestFit(x, y))
-        myLine = np.linspace(min(x), max(x), 100)
-
-        try:
-            fig.add_trace(
-                go.Scatter(x=myLine, y=poly_function(myLine), name="Iteration " + str(counter),
-                           line=dict(color='rgb(67,67,' + str(counter * 10) + ')')))
-        except Exception as e:
-            print("ERROR DRAWING GROUP LINE OF BEST FIT")
 
     return fig
 
@@ -552,31 +356,32 @@ def show_GroupLine():
 app = Dash(__name__)
 
 
-@callback(
-    Output(component_id='athleteGraph', component_property='figure'),
-    Output(component_id='my-output', component_property='children'),
-    Input(component_id='my-input', component_property='value'),
-    Input(component_id='everyoneGraph', component_property='hoverData')
-)
-def update_individual(textInput, hoverData):
-    if hoverData is not None:
-        pprint.pprint(hoverData)
-        athleteID = hoverData['points'][0]['customdata']
-        fig = athleteFigs[athleteID]
-        return fig, str(athleteInfo[athleteID]['firstname'] + " " + athleteInfo[athleteID]['lastname'])
-    else:
-        if textInput in listOfAthletes:
-            print(textInput)
-            fig = athleteFigs[textInput]
-            name = str(athleteInfo[int(textInput)]['firstname'] + " " + athleteInfo[int(textInput)]['lastname'])
-        else:
-            fig = go.Figure()
-            name = "ATHLETE NOT FOUND"
-        return fig, name
+# @callback(
+#     Output(component_id='athleteGraph', component_property='figure'),
+#     Output(component_id='my-output', component_property='children'),
+#     Input(component_id='my-input', component_property='value'),
+#     Input(component_id='everyoneGraph', component_property='hoverData')
+# )
+# def update_individual(textInput, hoverData):
+#     if hoverData is not None:
+#         pprint.pprint(hoverData)
+#         athleteID = hoverData['points'][0]['customdata']
+#         fig = athleteFigs[athleteID]
+#         return fig, str(athleteInfo[athleteID]['firstname'] + " " + athleteInfo[athleteID]['lastname'])
+#     else:
+#         if textInput in listOfAthletes:
+#             print(textInput)
+#             fig = athleteFigs[textInput]
+#             name = str(athleteInfo[int(textInput)]['firstname'] + " " + athleteInfo[int(textInput)]['lastname'])
+#         else:
+#             fig = go.Figure()
+#             name = "ATHLETE NOT FOUND"
+#         return fig, name
 
 
 @callback(
     Output(component_id='everyoneGraph', component_property='figure'),
+    Output(component_id='athleteGraph', component_property='figure'),
     Input(component_id='everyoneGraph', component_property='clickData'),
     Input(component_id='everyoneGraph', component_property='figure')
 )
@@ -589,13 +394,15 @@ def update_graph_colours(clickData, graph):
             else:
                 trace['marker']['color'] = 'purple'
                 trace['zorder'] = 5
-    return graph
+                fig = athleteFigs[trace['customdata'][0]]
+
+    return graph, fig
 
 
 if __name__ == '__main__':
     get_data()
     groupLine = create_GroupLine()
-    create_individualGraph()
+    calcIndividual()
     pprint.pprint(athleteLines)
     app.layout = html.Div([
         html.Div([
