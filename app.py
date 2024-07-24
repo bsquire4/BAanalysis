@@ -1,4 +1,6 @@
 import pprint
+
+import numpy
 import pandas as pd
 import psycopg2
 from psycopg2 import sql
@@ -15,6 +17,7 @@ from datetime import datetime
 import math
 from dash import Dash, dcc, html, Input, Output, callback
 import dbDetails
+import statistics
 
 listOfDFs = {}
 listOfAthletes = []
@@ -26,14 +29,17 @@ groupLine = None
 
 
 def seconds_to_minutes_and_seconds(seconds):
-    minutes = int(seconds // 60)
-    remaining_seconds = seconds % 60
-    if minutes > 60:
-        hours = minutes // 60
-        minutes -= hours * 60
-        return f"{hours}:{minutes}:{remaining_seconds:.0f}"
+    if seconds is None:
+        return None
     else:
-        return f"{minutes}:{remaining_seconds:.2f}"
+        minutes = int(seconds // 60)
+        remaining_seconds = seconds % 60
+        if minutes > 60:
+            hours = minutes // 60
+            minutes -= hours * 60
+            return f"{hours}:{minutes}:{remaining_seconds:.0f}"
+        else:
+            return f"{minutes}:{remaining_seconds:.2f}"
 
 
 def idToName(inputArray):
@@ -41,6 +47,26 @@ def idToName(inputArray):
     for i in inputArray:
         newArray.append(str(athleteInfo[i]['firstname'] + " " + athleteInfo[i]['lastname']))
     return newArray
+
+
+def find_closest_performances(input_age, x, y, num_closest):
+    # Calculate the absolute differences between the input age and all ages in the dataset
+    differences = np.abs(x - input_age)
+
+    # Find the indices of the smallest differences
+    closest_indices = np.argsort(differences)[:num_closest]
+
+    # Retrieve the corresponding ages and performances
+    closest_ages = x[closest_indices]
+    closest_performances = y[closest_indices]
+    closest_difference = differences[closest_indices]
+
+    mean = 0
+    for i in range(num_closest):
+        mean = (mean + (np.exp(-closest_difference[i]) * closest_performances[i])) / (
+            np.exp(-closest_difference[i]) + 1)
+
+    return mean
 
 
 def NameToID(inputArray):
@@ -199,18 +225,15 @@ def create_GroupLine():
 
 def calc_weight(x_in, y_in):
     poly = np.poly1d(groupLine)
-    w = np.ones(x_in.shape[0])
+    residuals = (y_in - poly(x_in))
 
-    for i in range(len(w)):
-        w[i] = poly(x_in[i]) - y_in[i]
+    w = (residuals - np.min(residuals)) / (np.max(residuals) - np.min(residuals))
+    weights = w ** 2
 
-    min_val = np.min(w)
-    max_val = np.max(w)
+    weights[0] = min(1, weights[0] * 2)
+    weights[-1] = min(1, weights[-1] * 2)
 
-    w = (1 - (w - min_val) / (max_val - min_val)) ** 2
-    w[0] = min(1, 2 * w[0])
-    w[-1] = min(1, 2 * w[0])
-    return w
+    return weights
 
 
 def calcIndividual():
@@ -222,39 +245,66 @@ def calcIndividual():
         best_degree = 0
         best_r2 = 0
         athletedf = listOfDFs[athlete_id]
-        if len(athletedf) > 8:
+
+        fig = go.Figure()
+
+        if len(athletedf) > 10:
+            x_df = athletedf['age'].to_numpy()
+            y_df = athletedf['wa_points'].to_numpy()
+            yearsRunning = int(max(x_df) - min(x_df))
+            d = min(max(yearsRunning, 8), 15)
+
+            # add data to smoothen line
+            x_additional = np.linspace(min(x_df), max(x_df), yearsRunning * 2)
+            y_additional = list()
+            for i in x_additional:
+                y_additional.append(float((groupLine(i) + find_closest_performances(i, x_df, y_df, 5)) / 2))
+
+            newdf = pd.DataFrame({
+                'event': [None] * len(x_additional),  # Initialize with None or any other placeholder
+                'date': [None] * len(x_additional),  # Initialize with None or any other placeholder
+                'performance': [0] * len(x_additional),  # Initialize with None or any other placeholder
+                'wa_points': np.array(y_additional),
+                'age': np.array(x_additional),
+                'split': ['smoothening data'] * len(x_additional)  # Repeat the string for each row
+            })
+            athletedf['split'] = None
+            print(len(athletedf))
+            print(len(newdf))
+            athletedf = pd.concat([athletedf, newdf], ignore_index=True)
+
+            x_df = athletedf['age'].to_numpy()
+            y_df = athletedf['wa_points'].to_numpy()
 
             train_idx, test_idx = train_test_split(athletedf.index, test_size=0.25, random_state=104, shuffle=True)
-            athletedf['split'] = 'train'
-            athletedf.loc[test_idx, 'split'] = 'test'
 
-            x = athletedf['age'].values
-            y = athletedf['wa_points'].values
-            x_train = x[train_idx]
-            y_train = y[train_idx]
-            x_test = x[test_idx]
-            y_test = y[test_idx]
+            def splitDataTrain(value):
+                return 'train' if pd.isna(value) else value
 
-            w = calc_weight(x_train, y_train)
+            athletedf['split'] = athletedf['split'].apply(splitDataTrain)
 
-            fig = go.Figure()
+            def splitDataTest(value):
+                return 'test' if pd.isna(value) else value
 
-            athletedf['readablePerformance'] = athletedf['performance'].apply(seconds_to_minutes_and_seconds)
-
-            fig = px.scatter(
-                athletedf, x='age', y='wa_points', color='split', hover_data=['event', 'readablePerformance']
+            athletedf.loc[test_idx, 'split'] = np.where(
+                athletedf.loc[test_idx, 'split'].isna(), 'test', athletedf.loc[test_idx, 'split']
             )
 
-            yearsRunning = int(max(x) - min(x))
-            d = max(yearsRunning, 8)
-            d = min(yearsRunning,15)
+            athletedf['readablePerformance'] = athletedf['performance'].apply(seconds_to_minutes_and_seconds)
+            print(len(athletedf))
+
+            fig = px.scatter(athletedf, x='age', y='wa_points', color='split',
+                             hover_data=['event', 'readablePerformance'])
+            x_train = x_df[train_idx]
+            y_train = y_df[train_idx]
+            x_test = x_df[test_idx]
+            y_test = y_df[test_idx]
 
             for degree in range(1, d):
-                # Perform polynomial regression
                 # creating model
-                firstModel = np.polynomial.Polynomial.fit(x_train, y_train, degree, w=w, domain=[min(x), max(x)])
+                firstModel = np.polynomial.Polynomial.fit(x_train, y_train, degree, w=calc_weight(x_train, y_train),
+                                                          domain=[min(x_df), max(x_df)])
                 unweighedModel = np.polynomial.Polynomial.fit(x_train, y_train, degree)
-                y_pred = unweighedModel(x)
 
                 # checking for overfitting
                 y_testing = firstModel(x_test)
@@ -262,63 +312,52 @@ def calcIndividual():
                 # print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2first))
 
                 # checking for outliers
-                residuals = y - y_pred
+                y_pred = unweighedModel(x_df)
+                residuals = y_df - y_pred
                 std_dev = np.std(residuals)
                 threshold = 2 * std_dev
                 mask = np.abs(residuals) <= threshold  # Efficient outlier detection using boolean mask
 
-                x_filtered = x[mask]
-                y_filtered = y[mask]
+                x_filtered = x_df[mask]
+                y_filtered = y_df[mask]
                 # print("REMOVED {} outliers".format(len(X) - len(x_filtered)))
+                (x_filteredtrain, x_filteredtest,
+                 y_filteredtrain, y_filteredtest) = train_test_split(x_filtered, y_filtered, test_size=0.25,
+                                                                     random_state=42, shuffle=True)
 
                 # Modelling without outliers
-                secondModel = np.polynomial.Polynomial.fit(x_filtered, y_filtered, degree,
-                                                           w=calc_weight(x_filtered, y_filtered),
-                                                           domain=[min(x), max(x)])
-                y_testing2 = secondModel(x_filtered)
-                r2second = r2_score(y_filtered, y_testing2, sample_weight=calc_weight(x_filtered, y_filtered))
+                secondModel = np.polynomial.Polynomial.fit(x_filteredtrain, y_filteredtrain, degree,
+                                                           w=calc_weight(x_filteredtrain, y_filteredtrain),
+                                                           domain=[min(x_filteredtrain), max(x_filteredtrain)])
+                y_testing2 = secondModel(x_filteredtest)
+
+                r2second = r2_score(y_filteredtest, y_testing2,
+                                    sample_weight=calc_weight(x_filteredtest, y_filteredtest))
 
                 # print("R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2second))
 
-                myline = np.linspace(min(x), max(x), 100)
-                # print("LINE DRAWN")
-                if not (np.any(secondModel(myline) < 0) or np.any(secondModel(myline) > max(y))):
-                    fig.add_trace(
-                        go.Scatter(x=myline, y=secondModel(myline),
-                                   name='Degree {} // NO OUTLIERS // WEIGHTED'.format(degree),
-                                   line=dict(color="#ff0000"),
-                                   legendrank=1 - r2second))
+                myline = np.linspace(min(x_df), max(x_df), 100)
 
-                if not (np.any(unweighedModel(myline) < 0) or np.any(unweighedModel(myline) > max(y))):
-                    fig.add_trace(
-                        go.Scatter(x=myline, y=unweighedModel(myline),
-                                   name='Degree {} // UNWEIGHTED'.format(degree),
-                                   line=dict(color=str("#cfff00"))))
+                if not (np.any(firstModel(myline) < 0) or np.any(firstModel(myline) > max(y_df))):
+                    fig.add_trace(go.Scatter(x=myline, y=firstModel(myline),
+                                             name='Degree  {} // WEIGHTED'.format(degree),
+                                             line=dict(color="#00ff69"), legendrank=1 - r2first))
 
-                if not (np.any(firstModel(myline) < 0) or np.any(firstModel(myline) > max(y))):
-                    fig.add_trace(
-                        go.Scatter(x=myline, y=firstModel(myline),
-                                   name='Degree  {} // WEIGHTED'.format(degree),
-                                   line=dict(color="#00ff69"),
-                                   legendrank=1 - r2first))
+                if not (np.any(unweighedModel(myline) < 0) or np.any(unweighedModel(myline) > max(y_df))):
+                    fig.add_trace(go.Scatter(x=myline, y=unweighedModel(myline),
+                                             name='Degree {} // UNWEIGHTED'.format(degree),
+                                             line=dict(color=str("#cfff00"))))
 
-                if not (np.any(secondModel(myline) < 0) or np.any(secondModel(myline) > max(y))):
+                if not (np.any(secondModel(myline) < 0) or np.any(secondModel(myline) > max(y_df))):
+                    fig.add_trace(go.Scatter(x=myline, y=secondModel(myline),
+                                             name='Degree {} // NO OUTLIERS // WEIGHTED'.format(degree),
+                                             line=dict(color="#ff0000"), legendrank=1 - r2second))
+
                     if r2second > best_r2:
                         bestLine = secondModel
                         best_r2 = r2second
                         best_degree = degree
-            #         else:
-            #             print("Worse Model")
-            #     else:
-            #         print("Degree {} not accepted", format(degree))
-            #         print("Too low : {}".format(np.any(firstModel(myline) < 0)))
-            #         print("Too high : {}".format(np.any(firstModel(myline) > 1400)))
-            #         print("Too High for runner: {}".format(np.any(firstModel(myline) > max(y))))
-            # #
-            # print()
-            # print("Best degree of polynomial:", best_degree)
-            # print("Best R-squared score on test data:", best_r2)
-            # print()
+
         if best_r2 == 0:
             nofitCount += 1
             athleteFigs[athlete_id] = fig.to_dict()
@@ -331,6 +370,7 @@ def calcIndividual():
             degreeCount[best_degree - 1] += 1
             athleteFigs[athlete_id] = fig.to_dict()
             athleteLines[athlete_id] = bestLine
+
     print("NO FIT: {} / {}".format(nofitCount, len(listOfAthletes)))
     print("POOR FIT: {} / {}".format(poorfitCount, len(listOfAthletes)))
     print("GOOD FIT: {} / {}".format(goodLineCount, len(listOfAthletes)))
