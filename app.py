@@ -10,6 +10,9 @@ from sklearn.metrics import r2_score
 import matplotlib.dates as mdates
 import plotly.graph_objects as go
 import plotly.express as px
+from psycopg2 import pool
+from multiprocessing import Pool
+
 import warnings
 from datetime import datetime
 import math
@@ -76,79 +79,104 @@ def find_closest_performances(input_ages, x, y, num_closest):
     weights_sum = exp_neg_diff * closest_weights
 
     # Compute the weighted mean for each input age
-    mean = np.sum(weighted_perf, axis=0) / (np.sum(weights_sum, axis=0))  # Avoid division by zero
+    mean = np.sum(weighted_perf, axis=0) / (np.sum(weights_sum, axis=0) + 0.000000001)  # Avoid division by zero
 
     return mean
 
 
+# Initialize connection pool
+connection_pool = pool.SimpleConnectionPool(1, 20,
+                                            user=dbDetails.DB_USER,
+                                            password=dbDetails.DB_PASSWORD,
+                                            host=dbDetails.DB_HOST,
+                                            port=dbDetails.DB_PORT,
+                                            database=dbDetails.DB_NAME)
+
+
+def get_athletes():
+    conn = connection_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT athlete_id FROM athlete")
+        athletes = cursor.fetchall()
+        cursor.close()
+    finally:
+        connection_pool.putconn(conn)
+    return [athlete[0] for athlete in athletes]
+
+
+def get_athlete_info(athlete_id):
+    conn = connection_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT first_name, last_name, birthyear FROM athlete_info WHERE athlete_id = %s", (athlete_id,))
+        info = cursor.fetchone()
+        cursor.close()
+    finally:
+        connection_pool.putconn(conn)
+    firstname, lastname, birthyear = info
+    return {'firstname': firstname, 'lastname': lastname, 'birthyear': int(birthyear)}
+
+
+def get_athlete_performances(athlete_id):
+    conn = connection_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT event_title, date, performance_time, wa_points FROM athlete_performances WHERE athlete_id = %s",
+            (athlete_id,))
+        performances = cursor.fetchall()
+        cursor.close()
+    finally:
+        connection_pool.putconn(conn)
+    return performances
+
+
+def process_athlete(athlete_id):
+    athlete_info = get_athlete_info(athlete_id)
+    performances = get_athlete_performances(athlete_id)
+
+    athlete_data = []
+    for event_title, date, performance_time, wa_points in performances:
+        if wa_points:
+            performance_data = {
+                'event': event_title,
+                'date': date,
+                'performance': performance_time,
+                'wa_points': wa_points
+            }
+            athlete_data.append(performance_data)
+    if athlete_data:
+        athlete_df = pd.DataFrame(athlete_data)
+        dates = mdates.date2num(athlete_df['date'].values)
+        birthdate = datetime(athlete_info['birthyear'], 1, 1)
+        ages = [(date - mdates.date2num(birthdate)) / 365.25 for date in dates]
+        athlete_df['age'] = ages
+
+        return athlete_id, athlete_info, athlete_df
+
+
 def get_data():
-    conn = psycopg2.connect(
-        user=dbDetails.DB_USER,
-        password=dbDetails.DB_PASSWORD,
-        host=dbDetails.DB_HOST,
-        port=dbDetails.DB_PORT,
-        dbname=dbDetails.DB_NAME
-    )
-    cursor = conn.cursor()
+    global listOfAthletes
+    global listOfDFs
+    global athleteInfo
 
-    query = sql.SQL("""
-                    SELECT (event_title, date, performance_time, wa_points) FROM athlete_performances WHERE athlete_id = (%s)
-                            """)
+    start = datetime.now()
+    listOfAthletes = get_athletes()
 
-    get_athletes = sql.SQL("""
-                    SELECT (athlete_id) FROM athlete
-                                """)
 
-    get_athlete_info = sql.SQL("""
-                    SELECT (first_name, last_name, birthyear) FROM athlete_info WHERE athlete_id = (%s)
-                                       """)
+    with Pool(processes=4) as pool:
+        results = pool.map(process_athlete, listOfAthletes)
 
-    cursor.execute(get_athletes)
-    athleteList = cursor.fetchall()
+    for result in results:
+        if result:
+            athlete_id, athlete_info, athlete_df = result
+            athleteInfo[athlete_id] = athlete_info
+            listOfDFs[athlete_id] = athlete_df
 
-    for athlete in athleteList:
-        cursor.execute(get_athlete_info, (athlete,))
-        output = cursor.fetchone()
-        id = int(athlete[0])
-
-        firstname, lastname, birthyear = output[0].replace('(', '').replace(')', '').split(',')
-        athlete_info = ({
-            'firstname': firstname,
-            'lastname': lastname,
-            'birthyear': int(birthyear)
-        })
-        athleteInfo[id] = athlete_info
-
-        listOfAthletes.append(id)
-        athlete_data = []
-        cursor.execute(query, (athlete,))
-        output = cursor.fetchall()
-
-        for out in output:
-            out = out[0].strip('()').split(',')
-
-            if out[3] != '':
-                performance_data = {
-                    'event': str(out[0]),
-                    'date': out[1],
-                    'performance': float(out[2]),
-                    'wa_points': float(out[3])
-                }
-                athlete_data.append(performance_data)
-
-        athleteDataFrame = pd.DataFrame(athlete_data)
-
-        dates = mdates.date2num(athleteDataFrame['date'].values)
-
-        x = []
-        for xi in dates:
-            birthyear = datetime(athlete_info['birthyear'], month=1, day=1)
-            x.append(int(xi - mdates.date2num(birthyear)) / 365.25)
-
-        athleteDataFrame = athleteDataFrame.assign(age=x)
-
-        listOfDFs[id] = athleteDataFrame
-        # print(firstname + " " + lastname + " - " + str(id))
+    # pprint.pprint(listOfDFs)
+    print("FINISHED GETTING DATA IN {}".format(datetime.now() - start))
+    return None
 
 
 def calculateGroupBestFit(x, y):
@@ -204,21 +232,16 @@ def calculateGroupBestFit(x, y):
 
 
 def create_GroupLine():
+    start = datetime.now()
     x = []
     y = []
-    for athletes in listOfAthletes:
-        athleteDF = listOfDFs[athletes]
 
-        for age in athleteDF['age'].values:
-            x.append(age)
+    for athlete in listOfAthletes:
+        x.extend(listOfDFs[athlete]['age'].to_numpy())
+        y.extend(listOfDFs[athlete]['wa_points'].to_numpy())
 
-        for wa_points in athleteDF['wa_points'].values:
-            y.append(wa_points)
-
-        # can end loop here if no need to visualise line creation
-
-    poly_function = (calculateGroupBestFit(x, y))
-    myLine = np.linspace(min(x), max(x), 100)
+    poly_function = calculateGroupBestFit(x, y)
+    print("FINISHED MAKING GROUPLINE {}".format(datetime.now() - start))
 
     return poly_function
 
@@ -267,15 +290,14 @@ def calcIndividual2():
             yearsRunning = int(max(x_athlete) - min(x_athlete))
 
             x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-            y_smooth = list()
             polyvalue = groupLine(x_smooth)
             y_smooth = (polyvalue + 19 * find_closest_performances(x_smooth, x_athlete, y_athlete, 3)) / 20
             fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE"))
 
             fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
-
+            print(athlete_id)
+            x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, test_size=0.3, random_state=100)
             for deg in range(1, 10):
-                x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, test_size=0.3, random_state=100)
                 model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
 
                 y_pred = model(x_test)
@@ -307,7 +329,6 @@ def calcIndividual2():
             notlongCount += 1
             athleteFigs[athlete_id] = fig.to_dict()
             athleteLines[athlete_id] = None
-
 
     # print("FOR {} NOT ENOUGH DATA POINTS".format(athlete_id))
     print("GOOD FITS: {}".format(goodLineCount))
@@ -458,20 +479,20 @@ def create_groupGraph(inputList):
         athlete_dataFrame = listOfDFs[athlete_id]
 
         x = athlete_dataFrame['age'].values
-        y = athlete_dataFrame['wa_points'].values
 
-        # print("WRITING LINE :" + str(athlete_id))
         poly_function = athleteLines[athlete_id]
         myLine = np.linspace(min(x), max(x), 100)
 
         athlete_name = str(athleteInfo[athlete_id]['firstname'] + " " + athleteInfo[athlete_id]['lastname'])
         if poly_function is not None:
+            print("WRITING LINE FOR " + athlete_name)
             # poly_function = np.poly1d(poly_function)
             fig.add_trace(
                 go.Scatter(x=myLine, y=poly_function(myLine), name=athlete_name, customdata=[athlete_id] * len(myLine),
                            marker=dict(color=colors[counter % len(colors)]), zorder=0))
             counter += 1
             # print("LINE WRITTEN")
+        # print(counter)
     return fig
 
 
@@ -497,47 +518,46 @@ def update_individual(textInput, clickData):
     return fig, athlete_name
 
 
-@callback(
-    Output(component_id='everyoneGraph', component_property='figure'),
-    Input(component_id='everyoneGraph', component_property='clickData'),
-    Input(component_id='everyoneGraph', component_property='figure'),
-    Input('DropdownBox', 'value'), prevent_initial_call=True
+# @callback(
+#     Output(component_id='everyoneGraph', component_property='figure'),
+#     Input(component_id='everyoneGraph', component_property='clickData'),
+#     Input(component_id='everyoneGraph', component_property='figure'),
+#     Input('DropdownBox', 'value'), prevent_initial_call=True
+#
+# )
+# def update_graph_colours(clickData, graph, dropDownValues):
+#     start = datetime.now()
+#     greys = [
+#         '#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
+#         '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
+#         '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
+#         '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
+#         '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB']
+#
+#     athlete_ids = NameToID(dropDownValues) if dropDownValues is not None else listOfAthletes
+#     newfig = create_groupGraph(athlete_ids)
+#
+#     if clickData is not None:
+#         clickID = clickData['points'][0]['customdata']
+#         greyLen = len(greys)
+#         for counter, trace in enumerate(newfig['data']):
+#             if trace['customdata'][0] != clickID:
+#                 trace['marker']['color'] = greys[counter % greyLen]
+#                 trace['zorder'] = 0
+#             else:
+#                 trace['marker']['color'] = 'purple'
+#                 trace['zorder'] = 5
+#
+#     print("TAKES {} SECONDS TO UPDATE".format(datetime.now() - start))
+#     return
 
-)
-def update_graph_colours(clickData, graph, dropDownValues):
-    greys = [
-        '#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
-        '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
-        '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
-        '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
-        '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB']
-
-    counter = 0
-    if dropDownValues is not None:
-        newfig = create_groupGraph(NameToID(dropDownValues))
-    else:
-        newfig = create_groupGraph(listOfAthletes)
-
-    if clickData is not None:
-        for trace in newfig['data']:
-            if trace['customdata'][0] != clickData['points'][0]['customdata']:
-                trace['marker']['color'] = greys[counter % len(greys)]
-                trace['zorder'] = 0
-            else:
-                trace['marker']['color'] = 'purple'
-                trace['zorder'] = 5
-            counter += 1
-
-    return newfig
 
 
 if __name__ == '__main__':
-    print("THen this")
     get_data()
-    print("now that")
     groupLine = create_GroupLine()
     calcIndividual2()
-    print("this")
+    print("SIZE OF LIST OF ATHLETES: ", len(listOfAthletes))
 
     app = Dash()
     app.layout = html.Div([
@@ -552,5 +572,45 @@ if __name__ == '__main__':
             dcc.Graph(id="everyoneGraph", figure=create_groupGraph(listOfAthletes)),
             dcc.Graph(id='athleteGraph')
         ], style={'display': 'flex', 'justify-content': 'space-between'})])
+
+    app.clientside_callback(
+        """
+                function update_Colors(oldfig, clickData) {
+                    const greys = ['#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
+                        '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
+                        '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
+                        '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
+                        '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB'
+                    ];
+                    const newfig = {data:[], layout: oldfig.layout}
+
+                    if (clickData) {
+
+                      const clickID = clickData.points[0].customdata;
+                      const greyLen = greys.length;
+
+                      for (let counter = 0; counter < oldfig.data.length; counter++) {
+                          let trace = oldfig.data[counter];
+
+                          if (trace.customdata[0] !== clickID) {
+                              trace.marker.color = greys[counter % greyLen];
+                              trace.zorder = 0;
+                          } else {
+                              trace.marker.color = 'purple';
+                              trace.zorder = 5;
+                              console.log(trace)
+                          }
+                        newfig.data[counter] = trace;
+                      }
+                    return newfig;
+                    } else{
+                    return oldfig;
+                    }
+                }
+        """,
+        Output('everyoneGraph', 'figure'),
+        Input('everyoneGraph', 'figure'),
+        Input('everyoneGraph', 'clickData')
+    )
 
     app.run(debug=True, use_reloader=False)
