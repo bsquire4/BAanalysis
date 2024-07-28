@@ -163,6 +163,7 @@ def get_data():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
+    listOfAthletes = listOfAthletes[:200]
 
 
     with Pool(processes=4) as pool:
@@ -295,7 +296,6 @@ def calcIndividual2():
             fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE"))
 
             fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
-            print(athlete_id)
             x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, test_size=0.3, random_state=100)
             for deg in range(1, 10):
                 model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
@@ -335,7 +335,111 @@ def calcIndividual2():
     print("POOR FITS: {}".format(poorfitCount))
     print("NO FITS: {}".format(nofitCount))
     print("NOT BIG ENOUGH: {}".format(notlongCount))
-    print("TOOK: {}".format(datetime.now() - time))
+    print("CALC FITS TOOK: {}".format(datetime.now() - time))
+
+def concurrentIndividual():
+
+    start = datetime.now()
+    listofparam = [[id, listOfDFs[id], groupLine] for id in listOfAthletes]
+
+    print("TIME TO GENERATE PARAMS: {}".format(datetime.now() - start))
+    with Pool(processes=8) as pool:
+        results = pool.starmap(calcIndivConcurrent, listofparam)
+
+    print("TIME TO RUN THREADS: {}".format(datetime.now() - start))
+
+
+    for result in results:
+        if result:
+            id, fig, line = result
+            athleteFigs[id] = fig
+            athleteLines[id] = line
+
+    print("FINISHED CONCURRENT INDIVIDUALS IN {}".format(datetime.now() - start))
+
+
+
+def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
+    def find_closest_performances_conc(input_ages, x, y, num_closest):
+        input_ages = np.asarray(input_ages)
+        differences = np.abs(x[:, np.newaxis] - input_ages)
+
+        closest_indices = np.argpartition(differences, num_closest, axis=0)[:num_closest, :]
+        # weights = calc_weight(x, y)
+
+        closest_performances,closest_difference,closest_weights = (y[closest_indices],
+                            differences[closest_indices,
+                            np.arange(input_ages.size)],calc_weight_conc(x[closest_indices], y[closest_indices]))
+
+        # Vectorized weight calculations
+        exp_neg_diff = np.exp(-closest_difference)
+
+        # Compute the weighted mean for each input age
+        mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (np.sum(exp_neg_diff * closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
+
+        return mean
+
+    def calc_weight_conc(x_in, y_in):
+        if len(x_in) > 0:
+            w = groupLine(x_in) - y_in
+
+            w = (1 - (w - np.min(w)) / (np.max(w) - np.min(w))) ** 3
+
+            # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
+            # w[0] = min(1, 2 * w[0])
+            # w[-1] = min(1, 2 * w[0])
+            return w
+        else:
+            print("EMPTY ARRAY CALLED")
+
+    best_r2 = 0
+    # athleteDF = listOfDFs[athlete_id]
+    fig = go.Figure()
+    if len(athleteDF) > 10:
+        athleteDF['readablePerformance'] = athleteDF['performance'].apply(seconds_to_minutes_and_seconds)
+
+        fig = px.scatter(
+            athleteDF, x='age', y='wa_points', hover_data=['event', 'readablePerformance']
+        )
+
+        x_athlete = athleteDF['age'].to_numpy()
+        y_athlete = athleteDF['wa_points'].to_numpy()
+        yearsRunning = int(max(x_athlete) - min(x_athlete))
+
+        x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
+        y_smooth = (groupLine(x_smooth) + 19 * find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 3)) / 20
+        fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE"))
+
+        fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
+        x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, test_size=0.3, random_state=100)
+        for deg in range(1, 10):
+            model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
+
+            r2 = r2_score(y_test, model(x_test))
+            if r2 > best_r2:
+                best_r2 = r2
+                bestLine = model
+                best_deg = deg
+
+        print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
+        if best_r2 > 0.5:
+            fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE"))
+            return athlete_id, fig.to_dict(), bestLine
+
+        elif best_r2 == 0:
+            return athlete_id, fig.to_dict(), None
+
+
+        else:
+            fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
+            return athlete_id, fig.to_dict(), bestLine
+
+
+    else:
+        return athlete_id, fig.to_dict(), None
+
+    # print("FOR {} NOT ENOUGH DATA POINTS".format(athlete_id))
+
 
 
 def calcIndividual():
@@ -485,7 +589,7 @@ def create_groupGraph(inputList):
 
         athlete_name = str(athleteInfo[athlete_id]['firstname'] + " " + athleteInfo[athlete_id]['lastname'])
         if poly_function is not None:
-            print("WRITING LINE FOR " + athlete_name)
+            # print("WRITING LINE FOR " + athlete_name)
             # poly_function = np.poly1d(poly_function)
             fig.add_trace(
                 go.Scatter(x=myLine, y=poly_function(myLine), name=athlete_name, customdata=[athlete_id] * len(myLine),
@@ -552,11 +656,11 @@ def update_individual(textInput, clickData):
 #     return
 
 
-
 if __name__ == '__main__':
     get_data()
     groupLine = create_GroupLine()
-    calcIndividual2()
+    # calcIndividual2()
+    concurrentIndividual()
     print("SIZE OF LIST OF ATHLETES: ", len(listOfAthletes))
 
     app = Dash()
@@ -576,36 +680,37 @@ if __name__ == '__main__':
     app.clientside_callback(
         """
                 function update_Colors(oldfig, clickData) {
+                    console.log(oldfig);
                     const greys = ['#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
                         '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
                         '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
                         '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
                         '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB'
                     ];
-                    const newfig = {data:[], layout: oldfig.layout}
+                    const newfig = { data: [] };
 
                     if (clickData) {
+                        console.log(clickData.points[0].customdata);
 
-                      const clickID = clickData.points[0].customdata;
-                      const greyLen = greys.length;
+                        const clickID = clickData.points[0].customdata;
+                        const greyLen = greys.length;
 
-                      for (let counter = 0; counter < oldfig.data.length; counter++) {
+                        for (let counter = 0; counter < oldfig.data.length; counter++) {
                           let trace = oldfig.data[counter];
-
-                          if (trace.customdata[0] !== clickID) {
-                              trace.marker.color = greys[counter % greyLen];
-                              trace.zorder = 0;
-                          } else {
-                              trace.marker.color = 'purple';
-                              trace.zorder = 5;
-                              console.log(trace)
+                          trace.marker.color = greys[counter % greyLen];
+                          trace.zorder = 0;
+                          if (trace.customdata[0] === clickID) {
+                            trace.marker.color = 'purple';
+                            trace.zorder = 5;
+                            console.log(trace);
                           }
-                        newfig.data[counter] = trace;
+                          newfig.data.push(trace);
+                        }
+                        console.log('UPDATED!');
+                        return newfig;
+                      } else {
+                        return oldfig;
                       }
-                    return newfig;
-                    } else{
-                    return oldfig;
-                    }
                 }
         """,
         Output('everyoneGraph', 'figure'),
