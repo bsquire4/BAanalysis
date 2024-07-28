@@ -69,17 +69,18 @@ def find_closest_performances(input_ages, x, y, num_closest):
     closest_indices = np.argpartition(differences, num_closest, axis=0)[:num_closest, :]
     # weights = calc_weight(x, y)
 
-    closest_performances = y[closest_indices]
-    closest_difference = differences[closest_indices, np.arange(input_ages.size)]
-    closest_weights = calc_weight(x[closest_indices], y[closest_indices])
+    closest_performances, closest_difference, closest_weights = (y[closest_indices],
+                                                                 differences[
+                                                                     closest_indices, np.arange(input_ages.size)],
+                                                                 calc_weight(x[closest_indices],
+                                                                             y[closest_indices]))
 
     # Vectorized weight calculations
     exp_neg_diff = np.exp(-closest_difference)
-    weighted_perf = exp_neg_diff * closest_weights * closest_performances
-    weights_sum = exp_neg_diff * closest_weights
 
     # Compute the weighted mean for each input age
-    mean = np.sum(weighted_perf, axis=0) / (np.sum(weights_sum, axis=0) + 0.000000001)  # Avoid division by zero
+    mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (
+        np.sum(exp_neg_diff * closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
 
     return mean
 
@@ -163,10 +164,9 @@ def get_data():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
-    listOfAthletes = listOfAthletes[:200]
+    # listOfAthletes  =[470166]
 
-
-    with Pool(processes=4) as pool:
+    with Pool(processes=16) as pool:
         results = pool.map(process_athlete, listOfAthletes)
 
     for result in results:
@@ -249,15 +249,9 @@ def create_GroupLine():
 
 def calc_weight(x_in, y_in):
     if len(x_in) > 0:
-        w = np.ones(x_in.shape[0])
-
-        w = np.zeros_like(x_in)
         w = groupLine(x_in) - y_in
 
-        min_val = np.min(w)
-        max_val = np.max(w)
-
-        w = (1 - (w - min_val) / (max_val - min_val)) ** 3
+        w = (1 - (w - np.min(w)) / (np.max(w) - np.min(w))) ** 3
 
         # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
         # w[0] = min(1, 2 * w[0])
@@ -286,13 +280,11 @@ def calcIndividual2():
                 athleteDF, x='age', y='wa_points', hover_data=['event', 'readablePerformance']
             )
 
-            x_athlete = athleteDF['age'].to_numpy()
-            y_athlete = athleteDF['wa_points'].to_numpy()
+            x_athlete, y_athlete = athleteDF['age'].to_numpy(), athleteDF['wa_points'].to_numpy()
             yearsRunning = int(max(x_athlete) - min(x_athlete))
 
             x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-            polyvalue = groupLine(x_smooth)
-            y_smooth = (polyvalue + 19 * find_closest_performances(x_smooth, x_athlete, y_athlete, 3)) / 20
+            y_smooth = (groupLine(x_smooth) + 19 * find_closest_performances(x_smooth, x_athlete, y_athlete, 3)) / 20
             fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE"))
 
             fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
@@ -300,14 +292,13 @@ def calcIndividual2():
             for deg in range(1, 10):
                 model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
 
-                y_pred = model(x_test)
-                r2 = r2_score(y_test, y_pred)
+                r2 = r2_score(y_test, model(x_test))
                 if r2 > best_r2:
                     best_r2 = r2
                     bestLine = model
                     best_deg = deg
 
-            print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
+            # print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
             if best_r2 > 0.5:
                 goodLineCount += 1
                 fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE"))
@@ -337,8 +328,8 @@ def calcIndividual2():
     print("NOT BIG ENOUGH: {}".format(notlongCount))
     print("CALC FITS TOOK: {}".format(datetime.now() - time))
 
-def concurrentIndividual():
 
+def concurrentIndividual():
     start = datetime.now()
     listofparam = [[id, listOfDFs[id], groupLine] for id in listOfAthletes]
 
@@ -348,15 +339,12 @@ def concurrentIndividual():
 
     print("TIME TO RUN THREADS: {}".format(datetime.now() - start))
 
-
     for result in results:
-        if result:
-            id, fig, line = result
-            athleteFigs[id] = fig
-            athleteLines[id] = line
+        id, fig, line = result
+        athleteFigs[id] = fig
+        athleteLines[id] = line
 
     print("FINISHED CONCURRENT INDIVIDUALS IN {}".format(datetime.now() - start))
-
 
 
 def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
@@ -367,15 +355,18 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         closest_indices = np.argpartition(differences, num_closest, axis=0)[:num_closest, :]
         # weights = calc_weight(x, y)
 
-        closest_performances,closest_difference,closest_weights = (y[closest_indices],
-                            differences[closest_indices,
-                            np.arange(input_ages.size)],calc_weight_conc(x[closest_indices], y[closest_indices]))
+        closest_performances, closest_difference, closest_weights = (y[closest_indices],
+                                                                     differences[
+                                                                         closest_indices, np.arange(input_ages.size)],
+                                                                     calc_weight_conc(x[closest_indices],
+                                                                                      y[closest_indices]))
 
         # Vectorized weight calculations
         exp_neg_diff = np.exp(-closest_difference)
 
         # Compute the weighted mean for each input age
-        mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (np.sum(exp_neg_diff * closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
+        mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (
+            np.sum(exp_neg_diff * closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
 
         return mean
 
@@ -383,7 +374,14 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         if len(x_in) > 0:
             w = groupLine(x_in) - y_in
 
-            w = (1 - (w - np.min(w)) / (np.max(w) - np.min(w))) ** 3
+            if w.size > 0:  # Ensure w is not empty
+                w_min, w_max = np.min(w), np.max(w)
+                if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
+                    w = (1 - (w - w_min) / (w_max - w_min)) ** 3
+                else:
+                    w = np.ones_like(w)  # Handle case where all elements are the same
+            else:
+                w = np.array([])  # Handle the case where w is empty
 
             # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
             # w[0] = min(1, 2 * w[0])
@@ -407,11 +405,21 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         yearsRunning = int(max(x_athlete) - min(x_athlete))
 
         x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-        y_smooth = (groupLine(x_smooth) + 19 * find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 3)) / 20
+        y_smooth = (groupLine(x_smooth) + 19 * find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 8)) / 20
         fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE"))
 
         fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
-        x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, test_size=0.3, random_state=100)
+        # print(athlete_id)
+        try:
+            # pprint.pprint(x_smooth)
+            # pprint.pprint(y_smooth)
+            x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
+        except ValueError as e:
+            pprint.pprint(e)
+            pprint.pprint(x_smooth)
+            pprint.pprint(y_smooth)
+            return athlete_id, None, None
+
         for deg in range(1, 10):
             model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
 
@@ -421,7 +429,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
                 bestLine = model
                 best_deg = deg
 
-        print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
+    # print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
         if best_r2 > 0.5:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE"))
             return athlete_id, fig.to_dict(), bestLine
@@ -434,12 +442,10 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
             return athlete_id, fig.to_dict(), bestLine
 
-
     else:
         return athlete_id, fig.to_dict(), None
 
-    # print("FOR {} NOT ENOUGH DATA POINTS".format(athlete_id))
-
+# print("FOR {} NOT ENOUGH DATA POINTS".format(athlete_id))
 
 
 def calcIndividual():
@@ -679,7 +685,7 @@ if __name__ == '__main__':
 
     app.clientside_callback(
         """
-                function update_Colors(oldfig, clickData) {
+                function update_Colors(oldfig, clickData, inputID) {
                     console.log(oldfig);
                     const greys = ['#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
                         '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
@@ -687,35 +693,43 @@ if __name__ == '__main__':
                         '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
                         '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB'
                     ];
-                    const newfig = { data: [] };
-
-                    if (clickData) {
+                      const newfig = { data: [] };
+                      let athleteID = 0;
+                      if (clickData) {
                         console.log(clickData.points[0].customdata);
 
-                        const clickID = clickData.points[0].customdata;
-                        const greyLen = greys.length;
-
-                        for (let counter = 0; counter < oldfig.data.length; counter++) {
-                          let trace = oldfig.data[counter];
-                          trace.marker.color = greys[counter % greyLen];
-                          trace.zorder = 0;
-                          if (trace.customdata[0] === clickID) {
-                            trace.marker.color = 'purple';
-                            trace.zorder = 5;
-                            console.log(trace);
-                          }
-                          newfig.data.push(trace);
-                        }
-                        console.log('UPDATED!');
-                        return newfig;
+                        athleteID = clickData.points[0].customdata;
+                      } else if (inputID) {
+                        athleteID = parseInt(inputID);
                       } else {
                         return oldfig;
                       }
+                      const greyLen = greys.length;
+                      console.log(athleteID);
+                        if (athleteID != 0){
+                      for (let counter = 0; counter < oldfig.data.length; counter++) {
+                        let trace = oldfig.data[counter];
+                        trace.marker.color = greys[counter % greyLen];
+                        trace.zorder = 0;
+                        if (trace.customdata[0] === athleteID) {
+                          trace.marker.color = 'purple';
+                          trace.zorder = 5;
+                          console.log(trace);
+                        }
+                        newfig.data.push(trace);
+                      }
+                      console.log('UPDATED!');
+                      return newfig;
+                      }else{
+                      console.log("SHOULDNT GO HERE")
+                      }
+
                 }
         """,
         Output('everyoneGraph', 'figure'),
         Input('everyoneGraph', 'figure'),
-        Input('everyoneGraph', 'clickData')
+        Input('everyoneGraph', 'clickData'),
+        Input('my-input','value')
     )
 
     app.run(debug=True, use_reloader=False)
