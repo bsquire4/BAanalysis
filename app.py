@@ -174,9 +174,9 @@ def process_athlete(athlete_id):
         birthdate = datetime(athlete_info['birthyear'], 1, 1)
         ages = [(date - mdates.date2num(birthdate)) / 365.25 for date in dates]
         athlete_df['age'] = ages
-
-
         return athlete_id, athlete_info, athlete_df
+    else:
+        return athlete_id, None, None
 
 
 def get_data():
@@ -186,7 +186,6 @@ def get_data():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
-    # listOfAthletes  = listOfAthletes[:100]
 
     with Pool(processes=16) as pool:
         results = pool.map(process_athlete, listOfAthletes)
@@ -194,11 +193,15 @@ def get_data():
     for result in results:
         if result:
             athlete_id, athlete_info, athlete_df = result
-            athleteInfo[athlete_id] = athlete_info
-            listOfDFs[athlete_id] = athlete_df
-            for clubs in athlete_info['clubs']:
-                if clubs not in listOfClubs and clubs != '':
-                    listOfClubs.append(clubs)
+            if athlete_info:
+                athleteInfo[athlete_id] = athlete_info
+                listOfDFs[athlete_id] = athlete_df
+                for clubs in athlete_info['clubs']:
+                    if clubs not in listOfClubs and clubs != '':
+                        listOfClubs.append(clubs)
+            else:
+                listOfAthletes.remove(athlete_id)
+                print("REMOVING ATHLETE: ", athlete_id)
 
     listOfClubs.sort()
     print("FINISHED GETTING DATA IN {}".format(datetime.now() - start))
@@ -358,16 +361,34 @@ def concurrentIndividual():
     start = datetime.now()
     listofparam = [[id, listOfDFs[id], groupLine] for id in listOfAthletes]
 
-    print("TIME TO GENERATE PARAMS: {}".format(datetime.now() - start))
+    nofitCount = 0
+    poorfitCount = 0
+    notlongCount = 0
+    goodfitCount = 0
+
     with Pool(processes=8) as pool:
         results = pool.starmap(calcIndivConcurrent, listofparam)
 
     print("TIME TO RUN THREADS: {}".format(datetime.now() - start))
 
     for result in results:
-        id, fig, line = result
+        id, fig, line, r2 = result
         athleteFigs[id] = fig
         athleteLines[id] = line
+
+        if r2 == 0:
+            nofitCount += 1
+        elif r2 == 10:
+            notlongCount += 1
+        elif r2 > 0.5:
+            goodfitCount += 1
+        else:
+            poorfitCount += 1
+
+    print("GOOD FITS: {}".format(goodfitCount))
+    print("POOR FITS: {}".format(poorfitCount))
+    print("NO FITS: {}".format(nofitCount))
+    print("NOT BIG ENOUGH: {}".format(notlongCount))
 
     print("FINISHED CONCURRENT INDIVIDUALS IN {}".format(datetime.now() - start))
 
@@ -385,34 +406,13 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         closest_weights = calc_weight_conc(x[closest_indices], y[closest_indices])
 
         # Vectorized weight calculations
-        exp_neg_diff = np.exp(-(3 * closest_difference))
+        exp_neg_diff = np.exp(-(2 * closest_difference))
 
         # Compute the weighted mean for each input age
         mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (
-            np.sum(exp_neg_diff * closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
+            np.sum(exp_neg_diff * closest_weights, axis=0))  # Avoid division by zero
 
         return mean
-
-    def find_closest_performances_conc2(input_ages, x, y, num_closest):
-        input_ages = np.asarray(input_ages)
-        differences = np.abs(x[:, np.newaxis] - input_ages)
-
-        closest_indices = np.argpartition(differences, num_closest, axis=0)[:num_closest, :]
-        # weights = calc_weight(x, y)
-
-        closest_performances = y[closest_indices]
-        closest_difference = differences[closest_indices, np.arange(input_ages.size)]
-        closest_weights = calc_weight_conc(x[closest_indices], y[closest_indices])
-
-        # Vectorized weight calculations
-        exp_neg_diff = np.exp(-(3 * closest_difference))
-
-        # Compute the weighted mean for each input age
-        mean = np.sum(closest_weights * closest_performances, axis=0) / (
-            np.sum(closest_weights, axis=0) + 0.000000001)  # Avoid division by zero
-
-        return mean
-
 
     def calc_weight_conc(x_in, y_in):
         if len(x_in) > 0:
@@ -421,7 +421,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
             if w.size > 0:  # Ensure w is not empty
                 w_min, w_max = np.min(w), np.max(w)
                 if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
-                    w = (1 - (w - w_min) / (w_max - w_min)) ** 2
+                    w = 3 * np.exp(5 * - ((w - w_min) / (w_max - w_min)))
                 else:
                     w = np.ones_like(w)  # Handle case where all elements are the same
             else:
@@ -437,63 +437,60 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
     best_r2 = 0
     # athleteDF = listOfDFs[athlete_id]
     fig = go.Figure()
-    if len(athleteDF) > 10:
-        athleteDF['readablePerformance'] = athleteDF['performance'].apply(seconds_to_minutes_and_seconds)
+    athleteDF['readablePerformance'] = athleteDF['performance'].apply(seconds_to_minutes_and_seconds)
 
-        fig = px.scatter(
-            athleteDF, x='age', y='wa_points', hover_data=['event', 'readablePerformance']
-        )
+    fig = px.scatter(
+        athleteDF, x='age', y='wa_points', hover_data=['event', 'readablePerformance']
+    )
 
-        x_athlete = athleteDF['age'].to_numpy()
-        y_athlete = athleteDF['wa_points'].to_numpy()
+    x_athlete = athleteDF['age'].to_numpy()
+    y_athlete = athleteDF['wa_points'].to_numpy()
+    if len(x_athlete) > 8 and max(x_athlete) - min(x_athlete) > 1:
+
         yearsRunning = int(max(x_athlete) - min(x_athlete))
 
         x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-        y_smooth = (groupLine(x_smooth) + 9 * find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 5)) / 10
-        fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="PERSON LINE 4"))
 
-        y_smooth2 = find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 5)
-        fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth2, marker=dict(color='red'), name="PERSON LINE 4 (NOT WITH GROUPLINE)"))
-
+        y_smooth = find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 4)
+        fig.add_trace(
+            go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='orange'), name="ROLLING AVERAGE"))
 
 
-        fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), name="GROUP LINE"))
+        fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), marker=dict(color='green'),  name="GROUP LINE"))
         # print(athlete_id)
-        try:
-            x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth2, random_state=101)
-        except ValueError as e:
-            pprint.pprint(e)
-            pprint.pprint(x_smooth)
-            pprint.pprint(y_smooth)
-            return athlete_id, None, None
 
-        for deg in range(1, 10):
+        x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
+
+        for deg in range(1, max(9, yearsRunning)):
             model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
-
             r2 = r2_score(y_test, model(x_test))
-            if r2 > best_r2:
-                best_r2 = r2
-                bestLine = model
-                best_deg = deg
 
-
+            if not (np.any(model(x_smooth) < 0) or np.any(model(x_smooth) > max(y_athlete) * 1.05)):
+                if r2 > best_r2:
+                    best_r2 = r2
+                    bestLine = model
+                    best_deg = deg
 
         # print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
         if best_r2 > 0.5:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE"))
-            return athlete_id, fig.to_dict(), bestLine
+            # GOOD FIT RETURN
+            return athlete_id, fig.to_dict(), bestLine, best_r2
 
         elif best_r2 == 0:
-            return athlete_id, fig.to_dict(), None
+            # NO FIT RETURN
+            return athlete_id, fig.to_dict(), None, best_r2
 
 
         else:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
-            return athlete_id, fig.to_dict(), bestLine
+            # POOR FIT RETURN
+            return athlete_id, fig.to_dict(), bestLine, best_r2
 
 
     else:
-        return athlete_id, fig.to_dict(), None
+        # NOT LONG ENOUGH RETURN
+        return athlete_id, fig.to_dict(), None, 10
 
 
 # print("FOR {} NOT ENOUGH DATA POINTS".format(athlete_id))
@@ -660,15 +657,16 @@ def create_groupGraph(inputList):
 @callback(
     Output(component_id='athleteGraph', component_property='figure'),
     Output(component_id='my-output', component_property='children'),
-    Input(component_id='my-input', component_property='value'),
+    Input(component_id='athleteInput', component_property='value'),
     Input(component_id='everyoneGraph', component_property='clickData'), prevent_initial_call=True
 )
-def update_individual(textInput, clickData):
-    athleteID = 0
-    if clickData is not None:
+def update_individual(athleteInput, clickData):
+    trigger_id = ctx.triggered_id
+    if trigger_id == 'everyoneGraph':
         athleteID = clickData['points'][0]['customdata']
-    elif textInput is not None:
-        athleteID = int(textInput)
+    else:
+        athleteID = NameToID([athleteInput])[0]
+
     if athleteID in listOfAthletes:
         print(athleteID)
         fig = athleteFigs[athleteID]
@@ -684,15 +682,15 @@ def update_individual(textInput, clickData):
     Input(component_id='everyoneGraph', component_property='clickData'),
     Input('everyoneGraph', 'figure'),
     Input('DropdownBox', 'value'),
-    Input('my-input', 'value'),
+    Input('athleteInput', 'value'),
     Input('age-slider', 'value'),
-    Input('clubsDropdown','value')
+    Input('clubsDropdown', 'value')
 )
-def update_graph(clickData, fig, athleteDropdown, textinput, rangeSlider, clubsDropdown):
+def update_graph(clickData, fig, athleteDropdown, indivAthleteDropdown, rangeSlider, clubsDropdown):
     start = datetime.now()
     trigger_id = ctx.triggered_id
 
-    if trigger_id == 'everyoneGraph' or trigger_id == 'my-input':
+    if trigger_id == 'everyoneGraph' or trigger_id == 'athleteInput':
         greys = [
             '#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
             '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
@@ -703,9 +701,7 @@ def update_graph(clickData, fig, athleteDropdown, textinput, rangeSlider, clubsD
         if trigger_id == 'everyoneGraph':
             athlete_id = clickData['points'][0]['customdata']
         else:
-            athlete_id = int(textinput)
-
-        print("ATHLETE ID: {}".format(athlete_id))
+            athlete_id = NameToID([indivAthleteDropdown])[0]
 
         patch_fig = Patch()
 
@@ -724,6 +720,7 @@ def update_graph(clickData, fig, athleteDropdown, textinput, rangeSlider, clubsD
 
         # patch_fig['data']['marker']['color'] = updated_colors
         print("TAKES {} SECONDS TO UPDATE".format(datetime.now() - start))
+
         return patch_fig
     else:
         athletes = NameToID(athleteDropdown) if athleteDropdown else listOfAthletes
@@ -735,7 +732,7 @@ def update_graph(clickData, fig, athleteDropdown, textinput, rangeSlider, clubsD
           Input('age-slider', 'value'))
 def update_dropdown(sliderValues):
     return idToName([athlete_id for athlete_id in listOfAthletes if
-                     sliderValues[0] < athleteInfo[athlete_id]['birthyear'] < sliderValues[1]])
+                     sliderValues[0] <= athleteInfo[athlete_id]['birthyear'] < sliderValues[1]])
 
 
 def agefillteredGraph(min, max, athletesList):
@@ -745,7 +742,8 @@ def agefillteredGraph(min, max, athletesList):
     newfig = create_groupGraph(figathletes)
     return newfig
 
-def clubfilter(athleteList,club):
+
+def clubfilter(athleteList, club):
     newList = [athleteid for athleteid in athleteList if club in athleteInfo[athleteid]['clubs']]
     return newList
 
@@ -756,20 +754,25 @@ if __name__ == '__main__':
     # calcIndividual2()
     concurrentIndividual()
     print("SIZE OF LIST OF ATHLETES: ", len(listOfAthletes))
-    print("LIST OF CLUBS")
-    pprint.pprint(listOfClubs)
     app = Dash()
     app.layout = html.Div([
         html.Div([
-            "Input: ",
-            dcc.Input(id='my-input', placeholder='Input AthleteID', type='number')
-        ]),
+                html.Div("View Athlete:", style={'display': 'flex', 'align-items': 'center'}),
+                dcc.Dropdown(idToName(listOfAthletes), id='athleteInput', placeholder='Select Athlete',
+                             style={'flex-grow': '1'}),
+                html.Div(style={'flex-grow': '1'})
+            ], style={'display': 'flex', 'flexDirection': 'row', 'gap': '10px', 'justify-content': 'flex-start',
+                      'align-items': 'center'}
+        ),
         dcc.RangeSlider(1950, 2010, step=1,
                         marks={1950: '1950', 1960: '1960', 1970: '1970', 1980: '1980', 1990: '1990', 2000: '2000',
-                               2010: '2010'}, value=[2000, 2008], id='age-slider', pushable=1, tooltip={"placement": "top", "always_visible": True}),
+                               2010: '2010'}, value=[2000, 2008], id='age-slider', pushable=1,
+                        tooltip={"placement": "top", "always_visible": True}),
         html.Div([
-            html.Content([dcc.Dropdown(idToName(listOfAthletes), id="DropdownBox", multi=True, placeholder="Select Athlete(s) To View")], style={'flex-grow': '1'})
-            , html.Content([dcc.Dropdown(listOfClubs, id='clubsDropdown', placeholder="Select Club To View")], style={'flex-grow':'1'})
+            html.Content([dcc.Dropdown(idToName(listOfAthletes), id="DropdownBox", multi=True,
+                                       placeholder="Select Athlete(s) To View")], style={'flex-grow': '1'})
+            , html.Content([dcc.Dropdown(listOfClubs, id='clubsDropdown', placeholder="Select Club To View")],
+                           style={'flex-grow': '1'})
         ], style={'display': 'flex', 'flexDirection': 'row', 'gap': '10px', 'justify-content': 'space-evenly'}
         ),
         html.Br(),
@@ -778,54 +781,5 @@ if __name__ == '__main__':
             dcc.Graph(id="everyoneGraph", figure=agefillteredGraph(2000, 2008, listOfAthletes)),
             dcc.Graph(id='athleteGraph')
         ], style={'display': 'flex', 'justify-content': 'space-between'})])
-
-    # app.clientside_callback(
-    #     """
-    #             function update_Colors(oldfig, clickData, inputID) {
-    #                 console.log(oldfig);
-    #                 const greys = ['#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
-    #                     '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
-    #                     '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
-    #                     '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
-    #                     '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB'
-    #                 ];
-    #                   const newfig = { data: [] };
-    #                   let athleteID = 0;
-    #                   if (clickData) {
-    #                     console.log(clickData.points[0].customdata);
-    #
-    #                     athleteID = clickData.points[0].customdata;
-    #                   } else if (inputID) {
-    #                     athleteID = parseInt(inputID);
-    #                   } else {
-    #                     return oldfig;
-    #                   }
-    #                   const greyLen = greys.length;
-    #                   console.log(athleteID);
-    #                     if (athleteID != 0){
-    #                   for (let counter = 0; counter < oldfig.data.length; counter++) {
-    #                     let trace = oldfig.data[counter];
-    #                     trace.marker.color = greys[counter % greyLen];
-    #                     trace.zorder = 0;
-    #                     if (trace.customdata[0] === athleteID) {
-    #                       trace.marker.color = 'purple';
-    #                       trace.zorder = 5;
-    #                       console.log(trace);
-    #                     }
-    #                     newfig.data.push(trace);
-    #                   }
-    #                   console.log('UPDATED!');
-    #                   return newfig;
-    #                   }else{
-    #                   console.log("SHOULDNT GO HERE")
-    #                   }
-    #
-    #             }
-    #     """,
-    #     Output('everyoneGraph', 'figure'),
-    #     Input('everyoneGraph', 'figure'),
-    #     Input('everyoneGraph', 'clickData'),
-    #     Input('my-input','value')
-    # )
 
     app.run(debug=True, use_reloader=False)
