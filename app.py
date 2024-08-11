@@ -405,8 +405,10 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         closest_difference = differences[closest_indices, np.arange(input_ages.size)]
         closest_weights = calc_weight_conc(x[closest_indices], y[closest_indices])
 
+        normalised_difference = closest_difference - np.min(closest_difference) / np.max(closest_difference) - np.min(closest_difference)
+
         # Vectorized weight calculations
-        exp_neg_diff = np.exp(-(2 * closest_difference))
+        exp_neg_diff = np.exp(-(2 * normalised_difference))
 
         # Compute the weighted mean for each input age
         mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (
@@ -445,9 +447,10 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
 
     x_athlete = athleteDF['age'].to_numpy()
     y_athlete = athleteDF['wa_points'].to_numpy()
-    if len(x_athlete) > 8 and max(x_athlete) - min(x_athlete) > 1:
+    yearsRunning = int((max(x_athlete) - min(x_athlete)))
+    print(yearsRunning)
 
-        yearsRunning = int(max(x_athlete) - min(x_athlete))
+    if len(x_athlete) > 8 and yearsRunning > 0:
 
         x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
 
@@ -622,13 +625,13 @@ def calcIndividual():
 
 
 def create_groupGraph(inputList):
-    colors = [
-        '#4D5A65', '#5D758E', '#7292B4', '#85AFD9', '#9BCDEB',
-        '#6D82A3', '#5C7291', '#404E66', '#4D6780', '#5A7A99',
-        '#7197B4', '#87B0D1', '#95C5DD', '#B2D9ED', '#6C8FA9',
-        '#59748D', '#405A73', '#4C6887', '#61809C', '#7DA2B7',
-        '#95C1D1', '#B2D3DD', '#7E94A4', '#8AA1B2', '#A8C3CC'
-    ]
+    # colors = [
+    #     '#4D5A65', '#5D758E', '#7292B4', '#85AFD9', '#9BCDEB',
+    #     '#6D82A3', '#5C7291', '#404E66', '#4D6780', '#5A7A99',
+    #     '#7197B4', '#87B0D1', '#95C5DD', '#B2D9ED', '#6C8FA9',
+    #     '#59748D', '#405A73', '#4C6887', '#61809C', '#7DA2B7',
+    #     '#95C1D1', '#B2D3DD', '#7E94A4', '#8AA1B2', '#A8C3CC'
+    # ]
 
     print("MAKING GROUP GRAPH")
     fig = go.Figure()
@@ -647,7 +650,7 @@ def create_groupGraph(inputList):
             # poly_function = np.poly1d(poly_function)
             fig.add_trace(
                 go.Scatter(x=myLine, y=poly_function(myLine), name=athlete_name, customdata=[athlete_id] * len(myLine),
-                           marker=dict(color=colors[counter % len(colors)]), zorder=0))
+                            zorder=0))
             counter += 1
             # print("LINE WRITTEN")
         # print(counter)
