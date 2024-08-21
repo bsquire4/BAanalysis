@@ -75,7 +75,6 @@ def returnData():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
-    listOfAthletes = listOfAthletes[:100]
     athleteInfo = get_info()
     athleteInfo.set_index('athlete_id', inplace=True)
     groupsOfPerformance = get_performances()

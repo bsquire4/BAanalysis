@@ -1,4 +1,6 @@
 import pprint
+import sys
+
 import pandas as pd
 import psycopg2
 from psycopg2 import sql
@@ -67,7 +69,7 @@ def calculateGroupBestFit(x, y):
     best_r2 = 0
     print("SIZE OF ARRAY {}".format(len(x)))
 
-    for degree in range(1, 7):
+    for degree in range(1, 5):
         # Perform polynomial regression
         fitting = np.polyfit(x_train, y_train, degree)
         model = np.poly1d(fitting)
@@ -76,36 +78,11 @@ def calculateGroupBestFit(x, y):
         r2all = r2_score(y_test, y_testing)
         print("R-squared score of test data for degree {} with outliers: {:.4f}".format(degree, r2all))
 
-        y_pred = model(x)
-        residuals = y - y_pred
 
-        # Compute the standard deviation of the residuals
-        std_dev = np.std(residuals)
-
-        # A common criterion: outliers are points where the residual is more than 2 standard deviations away
-        threshold = 1.5 * std_dev
-        outlier_indices = np.where(np.abs(residuals) > threshold)[0]
-
-        x_filtered = np.delete(x, outlier_indices)
-        y_filtered = np.delete(y, outlier_indices)
-
-        print("REMOVED {} outliers".format(len(x) - len(x_filtered)))
-
-        x_train2, x_test2, y_train2, y_test2 = train_test_split(x_filtered, y_filtered, random_state=107,
-                                                                test_size=0.33, shuffle=True)
-
-        mymodel2 = np.polynomial.Polynomial.fit(x_train2, y_train2, degree)
-
-        y_pred2 = mymodel2(x_test2)
-        r2inliers = r2_score(y_test2, y_pred2)
-
-        print(
-            "R-squared score of test data for degree {} without outliers: {:.4f}".format(degree, r2inliers))
-
-        if r2inliers > best_r2:
-            best_r2 = r2inliers
+        if r2all > best_r2:
+            best_r2 = r2all
             best_degree = degree
-            bestLine = mymodel2
+            bestLine = model
 
     print("BEST DEGREE IS: {}".format(best_degree))
 
@@ -123,6 +100,43 @@ def create_GroupLine():
 
     poly_function = calculateGroupBestFit(x, y)
     print("FINISHED MAKING GROUPLINE {}".format(datetime.now() - start))
+
+    # fig = go.Figure()
+    # x_line = np.linspace(min(x), max(x), 200)
+    # fig.add_trace(go.Scatter(x=x_line, y=poly_function(x_line), zorder=100))
+    # fig.add_trace(go.Scatter(x=x, y=y, mode='markers'))
+    # fig.show()
+
+    return poly_function
+
+def create_GroupLine2():
+    start = datetime.now()
+    x = []
+    y = []
+
+    for athlete in listOfAthletes:
+        line = athleteLines[athlete]
+        DF = listOfDFs[athlete]
+        maxx = max(DF['age'].to_numpy())
+        minn = min(DF['age'].to_numpy())
+        yearsrunning = int(maxx-minn)
+
+        if yearsrunning > 0 and line is not None:
+            x_tmp = np.linspace(minn,maxx, yearsrunning * 2)
+            y_tmp = line(x_tmp)
+
+            x.extend(x_tmp)
+            y.extend(y_tmp)
+
+    poly_function = calculateGroupBestFit(x, y)
+
+    # fig = go.Figure()
+    # fig.add_trace(go.Scatter(x=x, y=y, mode='markers'))
+    # x_line = np.linspace(min(x),max(x), 200)
+    # fig.add_trace(go.Scatter(x=x_line, y=poly_function(x_line), zorder=100))
+    # fig.show()
+
+    print("FINISHED MAKING GROUPLINE 2 {}".format(datetime.now() - start))
 
     return poly_function
 
@@ -173,14 +187,22 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
         closest_difference = differences[closest_indices, np.arange(input_ages.size)]
         closest_weights = calc_weight_conc(x[closest_indices], y[closest_indices])
 
+        non_abs_differences = x[:,np.newaxis] - input_ages
+        clostest_non_abs_differences = non_abs_differences[closest_indices, np.arange(input_ages.size)]
+
         normalised_difference = closest_difference - np.min(closest_difference) / np.max(closest_difference) - np.min(
             closest_difference)
 
         # Vectorized weight calculations
-        exp_neg_diff = np.exp(-(2 * normalised_difference))
+
+        exp_neg_diff = np.exp(-2 * normalised_difference)
+        # exp_neg_diff[exp_neg_diff < 0.1] = 0
+
+        tmp_close = np.min(closest_difference, axis=0)
+        aging = np.where(tmp_close < 0.5, 1, np.exp(-0.1 * tmp_close))
 
         # Compute the weighted mean for each input age
-        mean = np.sum(exp_neg_diff * closest_weights * closest_performances, axis=0) / (
+        mean = np.sum(aging * exp_neg_diff * closest_weights * closest_performances, axis=0) / (
             np.sum(exp_neg_diff * closest_weights, axis=0))  # Avoid division by zero
 
         return mean
@@ -192,7 +214,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
             if w.size > 0:  # Ensure w is not empty
                 w_min, w_max = np.min(w), np.max(w)
                 if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
-                    w = 3 * np.exp(5 * - ((w - w_min) / (w_max - w_min)))
+                    w = 5 * np.exp(5 * - ((w - w_min) / (w_max - w_min)))
                 else:
                     w = np.ones_like(w)  # Handle case where all elements are the same
             else:
@@ -204,6 +226,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
             return w
         else:
             print("EMPTY ARRAY CALLED")
+
 
     best_r2 = 0
     # athleteDF = listOfDFs[athlete_id]
@@ -221,17 +244,16 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine):
     if len(x_athlete) > 8 and yearsRunning > 0:
 
         x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-
         y_smooth = find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 6)
         fig.add_trace(
-            go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='orange'), name="ROLLING AVERAGE"))
+            go.Scatter(x=x_smooth, y=y_smooth, marker=dict(color='red'), name="ROLLING AVERAGE"))
 
         fig.add_trace(go.Scatter(x=x_smooth, y=groupLine(x_smooth), marker=dict(color='green'), name="GROUP LINE"))
         # print(athlete_id)
 
         x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
 
-        for deg in range(1, max(9, yearsRunning)):
+        for deg in range(1, max(9, min(yearsRunning,19))):
             model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
             r2 = r2_score(y_test, model(x_test))
 
@@ -290,6 +312,28 @@ def create_groupGraph(inputList):
                            zorder=0, marker=dict(color=colors[counter % len(colors)])))
             counter += 1
     return fig
+
+
+def show_groupLines():
+    line1 = create_GroupLine()
+    line2 = create_GroupLine2()
+
+    x= np.linspace(8,70,200)
+    y1=line1(x)
+    y2=line2(x)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(x=x, y=y1, name="Original",marker=dict(color='blue')))
+
+    fig.add_trace(
+        go.Scatter(x=x, y=y2, name="New",
+                   zorder=0, marker=dict(color='pink')))
+
+    fig.show()
+    input("")
+
+
 
 
 @callback(
@@ -386,10 +430,11 @@ def clubFilter(athleteList, club):
 
 if __name__ == '__main__':
     listOfAthletes, listOfDFs, listOfClubs, athleteInfo = get_data.returnData()
-
     groupLine = create_GroupLine()
     # calcIndividual2()
     concurrentIndividual()
+    # show_groupLines()
+    groupLine = create_GroupLine2()
     print("SIZE OF LIST OF ATHLETES: ", len(listOfAthletes))
     app = Dash()
     app.layout = html.Div([
