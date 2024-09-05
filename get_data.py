@@ -75,6 +75,7 @@ def returnData():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
+    listOfAthletes = listOfAthletes[:100]
     athleteInfo = get_info()
     athleteInfo.set_index('athlete_id', inplace=True)
     groupsOfPerformance = get_performances()
@@ -91,6 +92,7 @@ def returnData():
             birthdate = datetime(athleteInfo.loc[athlete]['birthyear'], 1, 1)
             ages = (dates - mdates.date2num(birthdate)) / 365.25
             df.loc[:, 'age'] = ages
+            df.loc[:, 'dec_date'] = (dates / 365.25) + 1970
             listOfDFs[athlete] = df
         else:
             removalList.append(athlete)
