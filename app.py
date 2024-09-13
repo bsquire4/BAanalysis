@@ -1,33 +1,18 @@
 import pprint
-import sys
-
-import pandas as pd
-import psycopg2
-from psycopg2 import sql
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
-import matplotlib.dates as mdates
 import plotly.graph_objects as go
 import plotly.express as px
-import psycopg2
 from multiprocessing import Pool
-from pandas import DataFrame
 import get_data
-
-import warnings
 from datetime import datetime
-import math
 from dash import Dash, dcc, html, Input, Output, callback, ctx, Patch
-import dbDetails
 
 athleteLines = {}
 athleteFigs = {}
 clubLines = {}
 groupLine = None
-x_data = ''
 
 
 def seconds_to_minutes_and_seconds(seconds):
@@ -91,33 +76,34 @@ def calculateGroupBestFit(x, y):
 
 
 def calcFit(x, y):
-    print("CALC FIT")
     x = np.array(x)
     y = np.array(y)
     best_r2 = 0
     bestLine = None
     x_train, x_test, y_train, y_test = train_test_split(x, y, random_state=101)
-
+    # fig= go.Figure()
+    fig = px.scatter(x=x,y=y)
     for deg in range(1, 9):
         model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
         r2 = r2_score(y_test, model(x_test))
         x_graph = np.linspace(min(x), max(x), 100)
-        print("r2 = {}".format(r2))
+        # print("r2 = {}".format(r2))
+
+        fig.add_trace(go.Scatter(x=x_graph, y=model(x_graph), name=deg))
 
         if not (np.any(model(x_graph) < 0) or np.any(model(x_graph) > max(y) * 1.05)):
-            print("ACCEPTED")
             if r2 > best_r2:
                 best_r2 = r2
                 bestLine = model
-                best_deg = deg
 
     if best_r2 > 0:
-        return bestLine
+        print("BEST r2 = {}".format(best_r2))
+        return bestLine, fig
     else:
-        return None
+        return None, fig
 
 
-def create_GroupLine():
+def create_GroupLine(x_data):
     start = datetime.now()
     x = []
     y = []
@@ -139,13 +125,13 @@ def create_GroupLine():
     return poly_function
 
 
-def create_GroupLine2(athleteList):
+def create_GroupLine2(athleteList, x_data):
     start = datetime.now()
     x = []
     y = []
 
     for athlete in athleteList:
-        line = athleteLines[athlete]
+        line = athleteLines[athlete][x_data]
         df = listOfDFs[athlete]
         maxx = np.max(df[x_data].to_numpy())
         minn = np.min(df[x_data].to_numpy())
@@ -175,7 +161,7 @@ def create_GroupLine2(athleteList):
 
 def concurrentIndividual():
     start = datetime.now()
-    listofparam = [[id, listOfDFs[id], groupLine, x_data] for id in listOfAthletes]
+    listofparam_age = [[athlete_id, listOfDFs[athlete_id], groupLine, 'age'] for athlete_id in listOfAthletes]
 
     nofitCount = 0
     poorfitCount = 0
@@ -183,12 +169,12 @@ def concurrentIndividual():
     goodfitCount = 0
 
     with Pool(processes=8) as pool:
-        results = pool.starmap(calcIndivConcurrent, listofparam)
+        results = pool.starmap(calcIndivConcurrent, listofparam_age)
 
     for result in results:
         athlete_id, fig, line, r2 = result
-        athleteFigs[athlete_id] = fig
-        athleteLines[athlete_id] = line
+        athleteFigs[athlete_id] = {'age': fig}
+        athleteLines[athlete_id] = {'age': line}
 
         if r2 == 0:
             nofitCount += 1
@@ -199,7 +185,37 @@ def concurrentIndividual():
         else:
             poorfitCount += 1
 
-    print("TIME TO RUN CALC INDIVIDUALS: {}".format(datetime.now() - start))
+    print("AGE")
+    print("GOOD FITS: {}".format(goodfitCount))
+    print("POOR FITS: {}".format(poorfitCount))
+    print("NO FITS: {}".format(nofitCount))
+    print("NOT BIG ENOUGH: {}".format(notlongCount))
+
+    listofparam_date = [[athlete_id, listOfDFs[athlete_id], groupLine, 'dec_date'] for athlete_id in listOfAthletes]
+
+    nofitCount = 0
+    poorfitCount = 0
+    notlongCount = 0
+    goodfitCount = 0
+
+    with Pool(processes=8) as pool:
+        results2 = pool.starmap(calcIndivConcurrent, listofparam_date)
+
+    for result in results2:
+        athlete_id, fig, line, r2 = result
+        athleteFigs[athlete_id].update({'dec_date': fig})
+        athleteLines[athlete_id].update({'dec_date': line})
+
+        if r2 == 0:
+            nofitCount += 1
+        elif r2 == 10:
+            notlongCount += 1
+        elif r2 > 0.5:
+            goodfitCount += 1
+        else:
+            poorfitCount += 1
+
+    print("DEC_DATE")
     print("GOOD FITS: {}".format(goodfitCount))
     print("POOR FITS: {}".format(poorfitCount))
     print("NO FITS: {}".format(nofitCount))
@@ -207,7 +223,7 @@ def concurrentIndividual():
     print("FINISHED CONCURRENT INDIVIDUALS IN {}".format(datetime.now() - start))
 
 
-def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
+def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
     def find_closest_performances_conc(x_linspace, x, y, num_closest):
         x_linspace = np.asarray(x_linspace)
         differences = np.abs(x[:, np.newaxis] - x_linspace)
@@ -218,9 +234,6 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
         closest_performances = y[closest_indices]
         closest_difference = differences[closest_indices, np.arange(x_linspace.size)]
         closest_weights = calc_weight_conc(x[closest_indices], y[closest_indices])
-
-        non_abs_differences = x[:, np.newaxis] - x_linspace
-        clostest_non_abs_differences = non_abs_differences[closest_indices, np.arange(x_linspace.size)]
 
         normalised_difference = closest_difference - np.min(closest_difference) / np.max(closest_difference) - np.min(
             closest_difference)
@@ -239,7 +252,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
 
         return mean
 
-    def find_closest_performances_conc_2(x_linspace, x, y, num_closest):
+    def find_closest_performances_conc_2(x_linspace, x, y):
         x_linspace = np.asarray(x_linspace)
 
         differences = x[:, np.newaxis] - x_linspace
@@ -257,7 +270,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
 
     def calc_weight_conc2(x_in, y_in):
         if len(x_in) > 0:
-            w = groupLine(x_in) - y_in
+            w = group_line(x_in) - y_in
 
             if w.size > 0:  # Ensure w is not empty
                 w_min, w_max = np.min(w), np.max(w)
@@ -277,7 +290,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
 
     def calc_weight_conc(x_in, y_in):
         if len(x_in) > 0:
-            w = groupLine(x_in) - y_in
+            w = group_line(x_in) - y_in
 
             if w.size > 0:  # Ensure w is not empty
                 w_min, w_max = np.min(w), np.max(w)
@@ -348,23 +361,23 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
     y_athlete = athleteDF['wa_points'].to_numpy()
     yearsRunning = int((max(x_athlete) - min(x_athlete)))
 
-    if len(x_athlete) > 8 and yearsRunning > 0:
+    if len(x_athlete) > 6 and yearsRunning > 0:
 
         x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
         y_smooth = find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 6)
         fig.add_trace(
             go.Scattergl(x=x_smooth, y=y_smooth, marker=dict(color='#bc6c25'), name="ROLLING AVERAGE"))
 
-        y_smooth2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete, 4)
-        fig.add_trace(
-            go.Scattergl(x=x_smooth, y=y_smooth2, marker=dict(color='blue'), name="ROLLING AVERAGE NEW!"))
+        # y_smooth2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete, 4)
+        # fig.add_trace(
+        #     go.Scattergl(x=x_smooth, y=y_smooth2, marker=dict(color='blue'), name="ROLLING AVERAGE NEW!"))
 
         # fig.add_trace(
         #     go.Scattergl(x=x_smooth, y=groupLine(x_smooth), marker=dict(color='green'), name="GROUP LINE"))
         # print(athlete_id)
 
         x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
-
+        bestLine = None
         for deg in range(1, max(9, min(yearsRunning, 19))):
             model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
             r2 = r2_score(y_test, model(x_test))
@@ -373,7 +386,6 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
                 if r2 > best_r2:
                     best_r2 = r2
                     bestLine = model
-                    best_deg = deg
 
         # print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
         if best_r2 > 0.5:
@@ -386,19 +398,17 @@ def calcIndivConcurrent(athlete_id, athleteDF, groupLine, x_data):
             # NO FIT RETURN
             return athlete_id, fig.to_dict(), None, best_r2
 
-
         else:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
             # POOR FIT RETURN
             return athlete_id, fig.to_dict(), bestLine, best_r2
-
 
     else:
         # NOT LONG ENOUGH RETURN
         return athlete_id, fig.to_dict(), None, 10
 
 
-def create_groupGraph(inputList):
+def create_groupGraph(inputList, x_data):
     colors = [
         '#3C4953', '#4A5E77', '#5A7492', '#6B8AAE', '#7FA5C7',
         '#556B83', '#4A6073', '#313D53', '#3C5266', '#4A657C',
@@ -415,7 +425,7 @@ def create_groupGraph(inputList):
 
         x = athlete_dataFrame[x_data].values
 
-        poly_function = athleteLines[athlete_id]
+        poly_function = athleteLines[athlete_id][x_data]
         myLine = np.linspace(min(x), max(x), 100)
 
         athlete_name = athleteInfo.loc[athlete_id]['full_name']
@@ -432,9 +442,9 @@ def create_groupGraph(inputList):
     return fig
 
 
-def show_groupLines():
-    line1 = create_GroupLine()
-    line2 = create_GroupLine2(listOfAthletes)
+def show_groupLines(x_data):
+    line1 = create_GroupLine(x_data)
+    line2 = create_GroupLine2(listOfAthletes, x_data)
 
     if x_data == 'dec_data':
         x = np.linspace(2000, 2025, 400)
@@ -455,35 +465,96 @@ def show_groupLines():
     fig.show()
 
 
+def create_clubLine(athleteList, x_data, clubname):
+    start = datetime.now()
+    x = []
+    y = []
+    print(clubname)
+
+    for athlete in athleteList:
+        line = athleteLines[athlete][x_data]
+        relations = clubsDF[(clubsDF['club'] == clubname) & (clubsDF['athlete_id'] == athlete)]
+        df = listOfDFs[athlete]
+        end_running = np.max(df[x_data].to_numpy())
+        start_running = np.min(df[x_data].to_numpy())
+
+        for _, relation in relations.iterrows():
+            # pprint.pprint(relation)
+            if x_data == 'dec_date':
+                minn = relation[x_data]['start_year']
+                maxx = relation[x_data]['end_year'] + 1
+
+                minn = max(minn, start_running)
+                maxx = min(maxx, end_running)
+            else:
+                minn = start_running
+                maxx = end_running
+
+            yearsatclub = int(maxx - minn)
+
+            # print("ATHLETE ID: {} CLUB: {} START: {} END: {} ".format(athlete,clubname,minn,maxx))
+
+            if yearsatclub > 0 and line is not None:
+                x_tmp = np.linspace(minn, maxx, yearsatclub * 12)
+                y_tmp = line(x_tmp)
+
+                x.extend(x_tmp)
+                y.extend(y_tmp)
+
+
+
+    if len(x) > 3 and len(y) > 3:
+        poly_function, figr = calcFit(x, y)
+    else:
+        poly_function, figr = None, None
+
+    if clubname == "Birmingham Uni" or clubname == "Loughborough Students":
+        print(x_data)
+        print(clubname)
+        fig = go.Figure(data=figr.data + create_groupGraph(clubFilter(listOfAthletes, clubname), x_data).data)
+
+        fig.show()
+    # fig.show()
+    # input("")
+
+    if poly_function is None:
+        print("NO LINE FOR " + clubname + " FOR " + x_data)
+        return None, None, None
+
+    return poly_function, min(x), max(x)
+
+
 def calcClubs():
     for club in listOfClubs:
         athleteList = clubFilter(listOfAthletes, club)
-        if athleteList:
-            validLine = any(athleteLines[athlete] for athlete in athleteList)
+        if athleteList and len(athleteList) > 1:
+            validLine = any(athleteLines[athlete]['age'] for athlete in athleteList)
             if validLine:
-                clubLines[club] = create_GroupLine2(athleteList)
+                line, smallest, largest = create_clubLine(athleteList, 'age', club)
+                clubLines[club] = {'age': (line, smallest, largest)}
             else:
-                clubLines[club] = None
+                clubLines[club] = {'age': (None, None, None)}
+
+            validLine = any(athleteLines[athlete]['dec_date'] for athlete in athleteList)
+            if validLine:
+                line, smallest, largest = create_clubLine(athleteList, 'dec_date', club)
+                clubLines[club].update({'dec_date': (line, smallest, largest)})
+            else:
+                clubLines[club].update({'dec_date': (None, None, None)})
         else:
             clubLines[club] = None
 
 
-def create_clubsGraph(clubsList):
+def create_clubsGraph(clubsList, x_data):
     fig = go.Figure()
     for club in clubsList:
-        athleteList = clubFilter(listOfAthletes, club)
-        if athleteList:
-            validLine = any(athleteLines[athlete] for athlete in athleteList)
-            if validLine and len(athleteList) > 1:
-                maxage = max(np.max(listOfDFs[athlete][x_data]) for athlete in athleteList if athleteLines[athlete])
-                minage = min(np.min(listOfDFs[athlete][x_data]) for athlete in athleteList if athleteLines[athlete])
+        if clubLines[club] is not None:
+            polyLine, minn, maxx = clubLines[club][x_data]
 
-                polyLine = clubLines[club]
-
-                if polyLine:
-                    x = np.linspace(minage, maxage, 200)
-                    y = polyLine(x)
-                    fig.add_trace(go.Scatter(x=x, y=y, name=club, customdata=[club] * len(x)))
+            if polyLine:
+                x = np.linspace(minn, maxx, 200)
+                y = polyLine(x)
+                fig.add_trace(go.Scatter(x=x, y=y, name=club, customdata=[club] * len(x)))
 
     return fig
 
@@ -492,17 +563,25 @@ def create_clubsGraph(clubsList):
     Output(component_id='athleteGraph', component_property='figure'),
     Output(component_id='my-output', component_property='children'),
     Input(component_id='athleteInput', component_property='value'),
-    Input(component_id='everyoneGraph', component_property='clickData'), prevent_initial_call=True
-)
-def update_individual(athleteInput, clickData):
+    Input(component_id='everyoneGraph', component_property='clickData'),
+    Input('x_data_Input', 'value'),
+    Input('my-output', 'children'),
+    prevent_initial_call=True)
+def update_individual(athleteInput, clickData, x_data, originalText):
     trigger_id = ctx.triggered_id
+
     if trigger_id == 'everyoneGraph':
         athlete_id = clickData['points'][0]['customdata']
-    else:
+    elif trigger_id == 'athleteInput':
         athlete_id = NameToID([athleteInput])[0]
+    else:
+        if originalText is None:
+            return go.Figure(), ''
+        else:
+            athlete_id = NameToID([originalText])[0]
 
     if athlete_id in listOfAthletes:
-        fig = athleteFigs[athlete_id]
+        fig = athleteFigs[athlete_id][x_data]
         athlete_name = athleteInfo.loc[athlete_id]['full_name']
     else:
         fig = go.Figure()
@@ -511,15 +590,16 @@ def update_individual(athleteInput, clickData):
 
 
 @callback(
-    Output(component_id='everyoneGraph', component_property='figure'),
-    Input(component_id='everyoneGraph', component_property='clickData'),
+    Output('everyoneGraph', 'figure'),
+    Input('everyoneGraph', 'clickData'),
     Input('everyoneGraph', 'figure'),
     Input('DropdownBox', 'value'),
     Input('athleteInput', 'value'),
     Input('age-slider', 'value'),
-    Input('clubsDropdown', 'value')
+    Input('clubsDropdown', 'value'),
+    Input('x_data_Input', 'value'),
 )
-def update_graph(clickData, fig, athleteDropdown, indivAthleteDropdown, rangeSlider, clubsDropdown):
+def update_graph(clickData, fig, athleteDropdown, indivAthleteDropdown, rangeSlider, clubsDropdown, x_data):
     trigger_id = ctx.triggered_id
 
     if trigger_id == 'everyoneGraph' or trigger_id == 'athleteInput':
@@ -550,7 +630,7 @@ def update_graph(clickData, fig, athleteDropdown, indivAthleteDropdown, rangeSli
     else:
         athletes = NameToID(athleteDropdown) if athleteDropdown else listOfAthletes
         filtered_athletes = clubFilter(athletes, clubsDropdown) if clubsDropdown else athletes
-        return ageFilteredGraph(rangeSlider[0], rangeSlider[1], filtered_athletes)
+        return ageFilteredGraph(rangeSlider[0], rangeSlider[1], filtered_athletes, x_data)
 
 
 @callback(Output('DropdownBox', 'options'),
@@ -561,22 +641,29 @@ def update_dropdown(sliderValues):
 
 
 @callback(Output('allClubGraph', 'figure'),
-          Input('allClubsDropdown', 'value'))
-def updateclubGraph(clubsDropdown):
+          Input('allClubsDropdown', 'value'),
+          Input('x_data_Input', 'value'),
+          prevent_initial_call=True)
+def updateclubGraph(clubsDropdown, x_data):
     clubs = clubsDropdown if clubsDropdown else listOfClubs
-    return create_clubsGraph(clubs)
+    return create_clubsGraph(clubs, x_data)
 
 
 @callback(Output('indivClubGraph', 'figure'),
           Input('allClubGraph', 'clickData'),
+          Input('x_data_Input', 'value'),
           prevent_initial_call=True)
-def updateClubGraphs(clickData):
+def updateClubGraphs(clickData, x_data):
+    trigger_id = ctx.triggered_id
+    if trigger_id == 'x_data_Input' and clickData is None:
+        return go.Figure()
+
     clubName = clickData['points'][0]['customdata']
 
-    return create_groupGraph(clubFilter(listOfAthletes, clubName))
+    return create_groupGraph(clubFilter(listOfAthletes, clubName), x_data)
 
 
-def ageFilteredGraph(minAge, maxAge, athletesList):
+def ageFilteredGraph(minAge, maxAge, athletesList, x_data):
     filtered_athletes = athleteInfo[
         (athleteInfo.index.isin(athletesList)) &
         (athleteInfo['birthyear'] >= minAge) &
@@ -585,34 +672,30 @@ def ageFilteredGraph(minAge, maxAge, athletesList):
 
     filtered_athlete_ids = filtered_athletes.index.tolist()
 
-    return create_groupGraph(filtered_athlete_ids)
+    return create_groupGraph(filtered_athlete_ids, x_data)
 
 
-def clubFilter(athleteList, club):
-    filtered_athletes = athleteInfo[
-        (athleteInfo.index.isin(athleteList)) &
-        (
-            athleteInfo['club1'].apply(lambda x: club in x if x else False) |
-            athleteInfo['club2'].apply(lambda x: club in x if x else False) |
-            athleteInfo['club3'].apply(lambda x: club in x if x else False)
-        )
-        ]
+def clubFilter(athleteList, searchClub):
+    dfClub = clubsDF.loc[clubsDF['club'] == searchClub]
+    athletes = dfClub['athlete_id'].to_numpy()
+    athleteList = np.array(athleteList)
+    filtered_athletes = np.intersect1d(athletes, athleteList)
 
-    return filtered_athletes.index.tolist()
+    return filtered_athletes.tolist()
 
 
 if __name__ == '__main__':
-    x_data = 'age'
-    # x_data = 'dec_date'
+    # x_data = 'age'
 
-    listOfAthletes, listOfDFs, listOfClubs, athleteInfo = get_data.returnData()
-    groupLine = create_GroupLine()
+    listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF = get_data.returnData()
+    groupLine = create_GroupLine('age')
     # calcIndividual2()
+    # x_data = 'dec_date'
     concurrentIndividual()
     # show_groupLines()
     # input("")
     calcClubs()
-    groupLine = create_GroupLine2(listOfAthletes)
+    groupLine = create_GroupLine2(listOfAthletes, 'age')
     print("SIZE OF LIST OF ATHLETES: ", len(listOfAthletes))
 
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
@@ -625,7 +708,8 @@ if __name__ == '__main__':
                     html.Div("View Athlete:", style={'display': 'flex', 'align-items': 'center'}),
                     dcc.Dropdown(idToName(listOfAthletes), id='athleteInput', placeholder='Select Athlete',
                                  style={'flex-grow': '1'}),
-                    html.Div(style={'flex-grow': '1'})
+                    html.Div(style={'flex-grow': '1'}),
+                    dcc.RadioItems(['dec_date', 'age'], 'age', inline=True, style={'flex-grow': '1'}, id='x_data_Input')
                 ], style={'display': 'flex', 'flexDirection': 'row', 'gap': '10px', 'justify-content': 'flex-start',
                           'align-items': 'center'}
                 ),
@@ -636,22 +720,22 @@ if __name__ == '__main__':
                                 tooltip={"placement": "top", "always_visible": True}),
                 html.Div([
                     html.Content([dcc.Dropdown(idToName(listOfAthletes), id="DropdownBox", multi=True,
-                                               placeholder="Select Athlete(s) To View")], style={'flex-grow': '1'})
-                    , html.Content([dcc.Dropdown(listOfClubs, id='clubsDropdown', placeholder="Select Club To View")],
-                                   style={'flex-grow': '1'})
+                                               placeholder="Select Athlete(s) To View")], style={'flex-grow': '1'}),
+                    html.Content([dcc.Dropdown(listOfClubs, id='clubsDropdown', placeholder="Select Club To View")],
+                                 style={'flex-grow': '1'})
                 ], style={'display': 'flex', 'flexDirection': 'row', 'gap': '10px', 'justify-content': 'space-evenly'}
                 ),
                 html.Br(),
                 html.Div(id='my-output'),
                 html.Div([
-                    dcc.Graph(id="everyoneGraph", figure=ageFilteredGraph(2000, 2008, listOfAthletes)),
+                    dcc.Graph(id="everyoneGraph", figure=ageFilteredGraph(2000, 2008, listOfAthletes, 'age')),
                     dcc.Graph(id='athleteGraph')
                 ], style={'display': 'flex', 'justify-content': 'space-between'})]),
             dcc.Tab(label='Clubs', children=[
                 html.Content([dcc.Dropdown(listOfClubs, id="allClubsDropdown", multi=True,
                                            placeholder="Select Club(s) To View")], style={'flex-grow': '1'}),
                 html.Div([
-                    dcc.Graph(id='allClubGraph', figure=create_clubsGraph(listOfClubs)),
+                    dcc.Graph(id='allClubGraph', figure=create_clubsGraph(listOfClubs, 'age')),
                     dcc.Graph(id='indivClubGraph')
                 ], style={'display': 'flex', 'justify-content': 'space-between'})
 
