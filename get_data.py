@@ -62,6 +62,7 @@ def get_athlete_clubs():
         df = DataFrame(cursor.fetchall())
         df.columns = ['athlete_id', 'club', 'start_year', 'end_year']
 
+
         def create_dec_date(row):
             return {
                 'dec_date': {
@@ -81,8 +82,6 @@ def get_athlete_clubs():
             }
 
         df = df.join(df.apply(create_age, axis=1, result_type='expand'))
-
-        print(df)
         return df
     except Exception as e:
         print("ERROR GETTING ATHLETE CLUBS")

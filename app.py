@@ -131,10 +131,7 @@ def create_GroupLine2(athleteList, x_data):
     y = []
 
     for athlete in athleteList:
-        line = athleteLines[athlete][x_data]
-        df = listOfDFs[athlete]
-        maxx = np.max(df[x_data].to_numpy())
-        minn = np.min(df[x_data].to_numpy())
+        line, minn, maxx = athleteLines[athlete][x_data]
         yearsrunning = int(maxx - minn)
 
         if yearsrunning > 0 and line is not None:
@@ -172,9 +169,9 @@ def concurrentIndividual():
         results = pool.starmap(calcIndivConcurrent, listofparam_age)
 
     for result in results:
-        athlete_id, fig, line, r2 = result
+        athlete_id, fig, line, r2, minn, maxx = result
         athleteFigs[athlete_id] = {'age': fig}
-        athleteLines[athlete_id] = {'age': line}
+        athleteLines[athlete_id] = {'age': (line,minn,maxx)}
 
         if r2 == 0:
             nofitCount += 1
@@ -202,9 +199,9 @@ def concurrentIndividual():
         results2 = pool.starmap(calcIndivConcurrent, listofparam_date)
 
     for result in results2:
-        athlete_id, fig, line, r2 = result
+        athlete_id, fig, line, r2, minn, maxx = result
         athleteFigs[athlete_id].update({'dec_date': fig})
-        athleteLines[athlete_id].update({'dec_date': line})
+        athleteLines[athlete_id].update({'dec_date': (line, minn, maxx)})
 
         if r2 == 0:
             nofitCount += 1
@@ -295,7 +292,7 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
             if w.size > 0:  # Ensure w is not empty
                 w_min, w_max = np.min(w), np.max(w)
                 if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
-                    w = 5 * np.exp(5 * - ((w - w_min) / (w_max - w_min)))
+                    w = 5 * np.exp(-5 * ((w - w_min) / (w_max - w_min)))
                 else:
                     w = np.ones_like(w)  # Handle case where all elements are the same
             else:
@@ -392,20 +389,20 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
             fig.add_trace(
                 go.Scattergl(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE", marker=dict(color='#bc4749')))
             # GOOD FIT RETURN
-            return athlete_id, fig.to_dict(), bestLine, best_r2
+            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete)
 
         elif best_r2 == 0:
             # NO FIT RETURN
-            return athlete_id, fig.to_dict(), None, best_r2
+            return athlete_id, fig.to_dict(), None, best_r2, min(x_athlete), max(x_athlete)
 
         else:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
             # POOR FIT RETURN
-            return athlete_id, fig.to_dict(), bestLine, best_r2
+            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete)
 
     else:
         # NOT LONG ENOUGH RETURN
-        return athlete_id, fig.to_dict(), None, 10
+        return athlete_id, fig.to_dict(), None, 10, min(x_athlete), max(x_athlete)
 
 
 def create_groupGraph(inputList, x_data):
@@ -421,12 +418,8 @@ def create_groupGraph(inputList, x_data):
     fig = go.Figure()
     counter = 0
     for athlete_id in inputList:
-        athlete_dataFrame = listOfDFs[athlete_id]
-
-        x = athlete_dataFrame[x_data].values
-
-        poly_function = athleteLines[athlete_id][x_data]
-        myLine = np.linspace(min(x), max(x), 100)
+        poly_function, minn, maxx = athleteLines[athlete_id][x_data]
+        myLine = np.linspace(minn, maxx, 100)
 
         athlete_name = athleteInfo.loc[athlete_id]['full_name']
 
@@ -472,12 +465,8 @@ def create_clubLine(athleteList, x_data, clubname):
     print(clubname)
 
     for athlete in athleteList:
-        line = athleteLines[athlete][x_data]
+        line, start_running, end_running = athleteLines[athlete][x_data]
         relations = clubsDF[(clubsDF['club'] == clubname) & (clubsDF['athlete_id'] == athlete)]
-        df = listOfDFs[athlete]
-        end_running = np.max(df[x_data].to_numpy())
-        start_running = np.min(df[x_data].to_numpy())
-
         for _, relation in relations.iterrows():
             # pprint.pprint(relation)
             if x_data == 'dec_date':
@@ -528,14 +517,14 @@ def calcClubs():
     for club in listOfClubs:
         athleteList = clubFilter(listOfAthletes, club)
         if athleteList and len(athleteList) > 1:
-            validLine = any(athleteLines[athlete]['age'] for athlete in athleteList)
+            validLine = any(athleteLines[athlete]['age'][0] for athlete in athleteList)
             if validLine:
                 line, smallest, largest = create_clubLine(athleteList, 'age', club)
                 clubLines[club] = {'age': (line, smallest, largest)}
             else:
                 clubLines[club] = {'age': (None, None, None)}
 
-            validLine = any(athleteLines[athlete]['dec_date'] for athlete in athleteList)
+            validLine = any(athleteLines[athlete]['dec_date'][0] for athlete in athleteList)
             if validLine:
                 line, smallest, largest = create_clubLine(athleteList, 'dec_date', club)
                 clubLines[club].update({'dec_date': (line, smallest, largest)})
