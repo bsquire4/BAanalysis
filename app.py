@@ -82,7 +82,7 @@ def calcFit(x, y):
     bestLine = None
     x_train, x_test, y_train, y_test = train_test_split(x, y, random_state=101)
     # fig= go.Figure()
-    fig = px.scatter(x=x,y=y)
+    fig = px.scatter(x=x, y=y)
     for deg in range(1, 9):
         model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
         r2 = r2_score(y_test, model(x_test))
@@ -171,7 +171,7 @@ def concurrentIndividual():
     for result in results:
         athlete_id, fig, line, r2, minn, maxx = result
         athleteFigs[athlete_id] = {'age': fig}
-        athleteLines[athlete_id] = {'age': (line,minn,maxx)}
+        athleteLines[athlete_id] = {'age': (line, minn, maxx)}
 
         if r2 == 0:
             nofitCount += 1
@@ -222,6 +222,26 @@ def concurrentIndividual():
 
 def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
     def find_closest_performances_conc(x_linspace, x, y, num_closest):
+        def calc_weight_conc(x_in, y_in):
+            if len(x_in) > 0:
+                w = group_line(x_in) - y_in
+
+                if w.size > 0:  # Ensure w is not empty
+                    w_min, w_max = np.min(w), np.max(w)
+                    if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
+                        w = 5 * np.exp(-5 * ((w - w_min) / (w_max - w_min)))
+                    else:
+                        w = np.ones_like(w)  # Handle case where all elements are the same
+                else:
+                    w = np.array([])  # Handle the case where w is empty
+
+                # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
+                # w[0] = min(1, 2 * w[0])
+                # w[-1] = min(1, 2 * w[0])
+                return w
+            else:
+                print("EMPTY ARRAY CALLED")
+
         x_linspace = np.asarray(x_linspace)
         differences = np.abs(x[:, np.newaxis] - x_linspace)
 
@@ -252,58 +272,86 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
     def find_closest_performances_conc_2(x_linspace, x, y):
         x_linspace = np.asarray(x_linspace)
 
-        differences = x[:, np.newaxis] - x_linspace
+        def gaussian(x_gau, amp=1, mean=0, sigma=1):
+            return amp * np.exp(-(x_gau - mean) ** 2 / (2 * sigma ** 2))
 
-        closest_weights = calc_weight_conc2(x, y)
-
-        y = y[:, np.newaxis]
-        closest_weights = closest_weights[:, np.newaxis]
-        exp_neg_diff = np.exp(-3 * differences ** 2)
-
-        mean = np.sum(exp_neg_diff * closest_weights * y, axis=0) / (
-            np.sum(exp_neg_diff * closest_weights + 1e-10, axis=0))  # Avoid division by zero
-
-        return mean
-
-    def calc_weight_conc2(x_in, y_in):
-        if len(x_in) > 0:
-            w = group_line(x_in) - y_in
-
-            if w.size > 0:  # Ensure w is not empty
-                w_min, w_max = np.min(w), np.max(w)
-                if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
-                    w = np.exp(-2 * ((w - w_min) / (w_max - w_min)))
+        def calc_weight_conc2(x_in, y_in):
+            if len(x_in) > 0:
+                w = group_line(x_in) - y_in
+                if w.size > 0:
+                    w_min, w_max = np.min(w), np.max(w)
+                    if w_min != w_max:
+                        w = np.exp(-5 * ((w - w_min) / (w_max - w_min)))
+                    else:
+                        w = np.ones_like(w)
                 else:
-                    w = np.ones_like(w)  # Handle case where all elements are the same
+                    w = np.array([])
+                return w
             else:
-                w = np.array([])  # Handle the case where w is empty
+                print("EMPTY ARRAY CALLED")
 
-            # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
-            # w[0] = min(1, 2 * w[0])
-            # w[-1] = min(1, 2 * w[0])
-            return w
-        else:
-            print("EMPTY ARRAY CALLED")
+        performance_weights = calc_weight_conc2(x, y)
 
-    def calc_weight_conc(x_in, y_in):
-        if len(x_in) > 0:
-            w = group_line(x_in) - y_in
+        if performance_weights.size == 0:
+            performance_weights = np.ones_like(x)  # Default to ones if empty
 
-            if w.size > 0:  # Ensure w is not empty
-                w_min, w_max = np.min(w), np.max(w)
-                if w_min != w_max:  # Ensure w has more than one unique value to avoid division by zero
-                    w = 5 * np.exp(-5 * ((w - w_min) / (w_max - w_min)))
+        averages = np.zeros(len(x_linspace))
+
+        for i, bin_center in enumerate(x_linspace):
+            closeness_weights = gaussian(x, mean=bin_center, sigma=0.5)  # 1D array
+            combined_weights = closeness_weights * performance_weights  # 1D array
+
+            x_mask = np.where(x <= bin_center, x, -np.inf)
+
+            closest = np.max(x_mask)
+
+            aging = gaussian(closest, mean=0, sigma=2)
+
+            averages[i] = aging * np.average(y, weights=combined_weights)
+
+        return averages
+
+    def find_closest_performances_conc_3(x_linspace, x, y):
+        x_linspace = np.asarray(x_linspace)
+
+        def gaussian(x_gau, amp=1, mean=0, sigma=1):
+            return amp * np.exp(-(x_gau - mean) ** 2 / (2 * sigma ** 2))
+
+        def calc_weight_conc2(x_in, y_in):
+            if len(x_in) > 0:
+                w = group_line(x_in) - y_in
+                if w.size > 0:
+                    w_min, w_max = np.min(w), np.max(w)
+                    if w_min != w_max:
+                        w = np.exp(-5 * ((w - w_min) / (w_max - w_min)))
+                    else:
+                        w = np.ones_like(w)
                 else:
-                    w = np.ones_like(w)  # Handle case where all elements are the same
+                    w = np.array([])
+                return w
             else:
-                w = np.array([])  # Handle the case where w is empty
+                print("EMPTY ARRAY CALLED")
 
-            # w = np.exp(2 * (1 - (w - min_val) / (max_val - min_val)) - 2)
-            # w[0] = min(1, 2 * w[0])
-            # w[-1] = min(1, 2 * w[0])
-            return w
-        else:
-            print("EMPTY ARRAY CALLED")
+        performance_weights = calc_weight_conc2(x, y)
+
+        if performance_weights.size == 0:
+            performance_weights = np.ones_like(x)  # Default to ones if empty
+
+        averages = np.zeros(len(x_linspace))
+
+        for i, bin_center in enumerate(x_linspace):
+            x_mask = np.where(x <= bin_center, x, -np.inf)
+            closeness_weights = gaussian(x_mask, mean=bin_center, sigma=0.5)  # 1D array
+            combined_weights = closeness_weights * performance_weights  # 1D array
+
+            differences = np.abs(bin_center - x)
+            closest = np.min(differences)
+
+            aging = gaussian(closest, mean=0, sigma=2)
+            print(aging)
+            averages[i] = aging * np.average(y, weights=combined_weights)
+
+        return averages
 
     best_r2 = 0
     # athleteDF = listOfDFs[athlete_id]
@@ -364,6 +412,16 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
         y_smooth = find_closest_performances_conc(x_smooth, x_athlete, y_athlete, 6)
         fig.add_trace(
             go.Scattergl(x=x_smooth, y=y_smooth, marker=dict(color='#bc6c25'), name="ROLLING AVERAGE"))
+
+        y_smooth_2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete)
+        fig.add_trace(
+            go.Scattergl(x=x_smooth, y=y_smooth_2, marker=dict(color='blue'), name="ROLLING AVERAGE 2")
+        )
+
+        y_smooth_3 = find_closest_performances_conc_3(x_smooth, x_athlete, y_athlete)
+        fig.add_trace(
+            go.Scattergl(x=x_smooth, y=y_smooth_3, marker=dict(color='pink'), name="ROLLING AVERAGE 3")
+        )
 
         # y_smooth2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete, 4)
         # fig.add_trace(
@@ -489,8 +547,6 @@ def create_clubLine(athleteList, x_data, clubname):
 
                 x.extend(x_tmp)
                 y.extend(y_tmp)
-
-
 
     if len(x) > 3 and len(y) > 3:
         poly_function, figr = calcFit(x, y)
