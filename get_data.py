@@ -119,7 +119,6 @@ def returnData():
 
     start = datetime.now()
     listOfAthletes = get_athletes()
-    listOfAthletes = listOfAthletes[:100]
     global athleteInfo
     athleteInfo = get_info()
     athleteInfo.set_index('athlete_id', inplace=True)
@@ -152,5 +151,6 @@ def returnData():
         listOfAthletes.remove(ath)
 
     listOfClubs.sort()
+
     print("FINISHED GETTING DATA IN {}".format(datetime.now() - start))
     return listOfAthletes, listOfDFs,listOfClubs,athleteInfo, clubsDF
