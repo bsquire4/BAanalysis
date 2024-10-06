@@ -62,7 +62,6 @@ def get_athlete_clubs():
         df = DataFrame(cursor.fetchall())
         df.columns = ['athlete_id', 'club', 'start_year', 'end_year']
 
-
         def create_dec_date(row):
             return {
                 'dec_date': {
