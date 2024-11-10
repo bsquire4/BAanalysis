@@ -7,7 +7,24 @@ import plotly.express as px
 from multiprocessing import Pool
 import calc_data
 from datetime import datetime
+import pickle
 from dash import Dash, dcc, html, Input, Output, callback, ctx, Patch
+
+colors = [
+    '#3C4953', '#4A5E77', '#5A7492', '#6B8AAE', '#7FA5C7',
+    '#556B83', '#4A6073', '#313D53', '#3C5266', '#4A657C',
+    '#5A7C92', '#6B91A8', '#79A3B7', '#8EB6C8', '#5B7385',
+    '#475A6F', '#314459', '#3A5772', '#4D6B88', '#678296',
+    '#79A0AE', '#8EB3BB', '#5E7A8C', '#6A8A9C', '#88A2A7'
+]
+
+greys = [
+    '#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
+    '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
+    '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
+    '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
+    '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB']
+
 
 def idToName(inputArray):
     filtered_df = athleteInfo[athleteInfo.index.isin(inputArray)]
@@ -28,40 +45,38 @@ def NameToID(inputArray):
     return newArray if newArray else None
 
 
-
-def create_groupGraph(inputList, x_data):
-    colors = [
-        '#3C4953', '#4A5E77', '#5A7492', '#6B8AAE', '#7FA5C7',
-        '#556B83', '#4A6073', '#313D53', '#3C5266', '#4A657C',
-        '#5A7C92', '#6B91A8', '#79A3B7', '#8EB6C8', '#5B7385',
-        '#475A6F', '#314459', '#3A5772', '#4D6B88', '#678296',
-        '#79A0AE', '#8EB3BB', '#5E7A8C', '#6A8A9C', '#88A2A7'
-    ]
-
+def create_groupGraph(inputList, x_data, chosenAthlete=None):
     print("MAKING GROUP GRAPH")
     fig = go.Figure()
-    counter = 0
-    for athlete_id in inputList:
-        poly_function, minn, maxx = athleteLines[athlete_id][x_data]
-        myLine = np.linspace(minn, maxx, 100)
+    traces = []
 
+    for counter, athlete_id in enumerate(inputList):
+        poly_function, minn, maxx, raw = athleteLines[athlete_id][x_data]
+        myLine = np.linspace(minn, maxx, 50)
         athlete_name = athleteInfo.loc[athlete_id]['full_name']
+        customdata = [athlete_id] * len(myLine)
 
-        # Can change to Scattergl when zorder is added tp Scattergl
-        # https://github.com/plotly/plotly.py/issues/4746
-        # change the onClick function as well when changed
         if poly_function is not None:
-            fig.add_trace(
+            # Determine color based on whether an athlete is chosen
+            if chosenAthlete is not None and athlete_id == chosenAthlete:
+                color = 'green'
+                z=1
+            elif chosenAthlete is not None:
+                color = greys[counter % len(greys)]
+                z=10
+            else:
+                color = colors[counter % len(colors)]
+                z=10
+
+            # Add the trace
+            traces.append(
                 go.Scatter(x=myLine, y=poly_function(myLine), name=athlete_name,
-                           customdata=[athlete_id] * len(myLine),
-                           zorder=1, marker=dict(color=colors[counter % len(colors)])))
-            counter += 1
+                           customdata=customdata, zorder=z,
+                           marker=dict(color=color))
+            )
+
+    fig.add_traces(traces)
     return fig
-
-
-
-
-
 
 
 def create_clubsGraph(clubsList, x_data):
@@ -112,52 +127,39 @@ def update_individual(athleteInput, clickData, x_data, originalText):
 @callback(
     Output('everyoneGraph', 'figure'),
     Input('everyoneGraph', 'clickData'),
-    Input('everyoneGraph', 'figure'),
     Input('DropdownBox', 'value'),
     Input('athleteInput', 'value'),
     Input('age-slider', 'value'),
     Input('clubsDropdown', 'value'),
     Input('x_data_Input', 'value'),
 )
-def update_graph(clickData, fig, athleteDropdown, indivAthleteDropdown, rangeSlider, clubsDropdown, x_data):
+def update_graph(clickData, athleteDropdown, indivAthleteDropdown, rangeSlider, clubsDropdown, x_data):
     trigger_id = ctx.triggered_id
 
     if trigger_id == 'everyoneGraph' or trigger_id == 'athleteInput':
-        greys = [
-            '#8A8D8F', '#A6AAB2', '#B8C4CC', '#CED4DB', '#D9E0E5',
-            '#9DAAB6', '#8C9FAF', '#6B788C', '#75889E', '#8498AF',
-            '#A7B8CC', '#BFC9D6', '#CBD4DF', '#E6EBF2', '#9CAAB8',
-            '#8A9AAB', '#6F7E8D', '#7D8A99', '#A4B2C0', '#C1CBD8',
-            '#D6DEE5', '#E8EDF3', '#B0BBC8', '#C5CDD4', '#E1E5EB']
 
         if trigger_id == 'everyoneGraph':
             athlete_id = clickData['points'][0]['customdata']
         else:
             athlete_id = NameToID([indivAthleteDropdown])[0]
 
-        patch_fig = Patch()
-
-        for counter, trace in enumerate(fig['data']):
-            aid = trace['customdata'][0]
-            if aid == athlete_id:
-                patch_fig['data'][counter]['marker']['color'] = 'green'
-                patch_fig['data'][counter]['zorder'] = 5
-            else:
-                patch_fig['data'][counter]['marker']['color'] = greys[counter % len(greys)]
-                patch_fig['data'][counter]['zorder'] = 1
-
-        return patch_fig
     else:
-        athletes = NameToID(athleteDropdown) if athleteDropdown else listOfAthletes
-        filtered_athletes = clubFilter(athletes, clubsDropdown) if clubsDropdown else athletes
-        return ageFilteredGraph(rangeSlider[0], rangeSlider[1], filtered_athletes, x_data)
+        athlete_id = None
+
+    athletes = NameToID(athleteDropdown) if athleteDropdown else listOfAthletes
+    filtered_athletes = clubFilter(athletes, clubsDropdown) if clubsDropdown else athletes
+    agefilteredAthletes = ageFilter(rangeSlider[0], rangeSlider[1], filtered_athletes, x_data)
+    return create_groupGraph(agefilteredAthletes, x_data, athlete_id)
 
 
 @callback(Output('DropdownBox', 'options'),
           Input('age-slider', 'value'))
 def update_dropdown(sliderValues):
-    return idToName([athlete_id for athlete_id in listOfAthletes if
-                     sliderValues[0] <= athleteInfo.loc[athlete_id]['birthyear'] < sliderValues[1]])
+    filtered_athletes = athleteInfo[
+        (athleteInfo['birthyear'] >= sliderValues[0]) & (athleteInfo['birthyear'] < sliderValues[1])
+        ].index
+
+    return idToName(filtered_athletes)
 
 
 @callback(Output('allClubGraph', 'figure'),
@@ -183,7 +185,7 @@ def updateClubGraphs(clickData, x_data):
     return create_groupGraph(clubFilter(listOfAthletes, clubName), x_data)
 
 
-def ageFilteredGraph(minAge, maxAge, athletesList, x_data):
+def ageFilter(minAge, maxAge, athletesList, x_data):
     filtered_athletes = athleteInfo[
         (athleteInfo.index.isin(athletesList)) &
         (athleteInfo['birthyear'] >= minAge) &
@@ -192,7 +194,7 @@ def ageFilteredGraph(minAge, maxAge, athletesList, x_data):
 
     filtered_athlete_ids = filtered_athletes.index.tolist()
 
-    return create_groupGraph(filtered_athlete_ids, x_data)
+    return filtered_athlete_ids
 
 
 def clubFilter(athleteList, searchClub):
@@ -206,10 +208,14 @@ def clubFilter(athleteList, searchClub):
 
 if __name__ == '__main__':
     # x_data = 'age'
-    athlete_data, calced_data = calc_data.calcedData()
+    # athlete_data, calced_data = calc_data.calcedData()
+    #
+    # listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF = athlete_data
+    # athleteLines,athleteFigs, clubLines, groupLine = calced_data
 
-    listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF = athlete_data
-    athleteLines,athleteFigs, clubLines, groupLine = calced_data
+    with open('athlete_data.pkl', 'rb') as f:
+        (listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF,
+         athleteLines, athleteFigs, clubLines, groupLine) = pickle.load(f)
 
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = Dash(__name__, external_stylesheets=external_stylesheets)
@@ -241,7 +247,7 @@ if __name__ == '__main__':
                 html.Br(),
                 html.Div(id='my-output'),
                 html.Div([
-                    dcc.Graph(id="everyoneGraph", figure=ageFilteredGraph(2000, 2008, listOfAthletes, 'age')),
+                    dcc.Graph(id="everyoneGraph", figure=create_groupGraph(ageFilter(2000,2008, listOfAthletes, 'age'), 'age')),
                     dcc.Graph(id='athleteGraph')
                 ], style={'display': 'flex', 'justify-content': 'space-between'})]),
             dcc.Tab(label='Clubs', children=[

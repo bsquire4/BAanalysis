@@ -8,6 +8,8 @@ from multiprocessing import Pool
 import get_data
 from datetime import datetime
 from dash import Dash, dcc, html, Input, Output, callback, ctx, Patch
+import pandas as pd
+import matplotlib.dates as mdates
 
 athleteLines = {}
 athleteFigs = {}
@@ -108,7 +110,7 @@ def create_GroupLine2(athleteList, x_data):
     y = []
 
     for athlete in athleteList:
-        line, minn, maxx = athleteLines[athlete][x_data]
+        line, minn, maxx, raw = athleteLines[athlete][x_data]
         yearsrunning = int(maxx - minn)
 
         if yearsrunning > 0 and line is not None:
@@ -139,7 +141,7 @@ def process_individual_params(label, list_of_params, pool):
     results = pool.starmap(calcIndivConcurrent, list_of_params)
 
     for result in results:
-        athlete_id, fig, line, r2, minn, maxx = result
+        athlete_id, fig, line, r2, minn, maxx, raw = result
 
         # Initialize athleteFigs[athlete_id] and athleteLines[athlete_id] if they don't exist
         if athlete_id not in athleteFigs:
@@ -149,7 +151,7 @@ def process_individual_params(label, list_of_params, pool):
 
         # Update the data
         athleteFigs[athlete_id].update({label: fig})
-        athleteLines[athlete_id].update({label: (line, minn, maxx)})
+        athleteLines[athlete_id].update({label: (line, minn, maxx, raw)})
 
         # Count fit quality
         if r2 > 0.5:
@@ -175,7 +177,7 @@ def concurrentIndividual():
     listofparam_date = [[athlete_id, listOfDFs[athlete_id], groupLine, 'dec_date'] for athlete_id in listOfAthletes]
 
     # Use one Pool for both tasks
-    with Pool(processes=16) as pool:
+    with Pool(processes=8) as pool:
         process_individual_params('age', listofparam_age, pool)
         process_individual_params('dec_date', listofparam_date, pool)
 
@@ -288,15 +290,20 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
 
     if len(x_athlete) > 6 and yearsRunning > 0:
 
-        x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
-        y_smooth_2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete)
+        if x_data == 'age':
+            x_smooth = np.linspace(min(x_athlete), max(x_athlete), yearsRunning * 24)
+        else:
+            currentyear = (mdates.date2num(datetime.now()) / 365.25) + 1970
+            x_smooth = np.linspace(min(x_athlete), currentyear, int((currentyear - min(x_athlete)) * 24))
+
+        y_smooth = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete)
         fig.add_trace(
-            go.Scattergl(x=x_smooth, y=y_smooth_2, marker=dict(color='blue'), name="ROLLING AVERAGE 2")
+            go.Scattergl(x=x_smooth, y=y_smooth, marker=dict(color='blue'), name="ROLLING AVERAGE 2")
         )
 
-        x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth_2, random_state=101)
+        x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
         bestLine = None
-        for deg in range(1, max(9, min(yearsRunning, 19))):
+        for deg in range(2, max(9, min(yearsRunning, 19))):
             model = np.polynomial.Polynomial.fit(x_train, y_train, deg)
             r2 = r2_score(y_test, model(x_test))
 
@@ -305,36 +312,38 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
                     best_r2 = r2
                     bestLine = model
 
+        performance_coordinates = pd.DataFrame({'x': x_smooth, 'y': y_smooth})
+
         # print("FOR {} THE BEST DEGREE: {} WITH R2: {}".format(athlete_id, best_deg, best_r2))
         if best_r2 > 0.5:
             fig.add_trace(
                 go.Scattergl(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE", marker=dict(color='#bc4749')))
             # GOOD FIT RETURN
-            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete)
+            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete), performance_coordinates
 
         elif best_r2 == 0:
             # NO FIT RETURN
-            return athlete_id, fig.to_dict(), None, best_r2, min(x_athlete), max(x_athlete)
+            return athlete_id, fig.to_dict(), None, best_r2, min(x_athlete), max(x_athlete), performance_coordinates
 
         else:
             fig.add_trace(go.Scatter(x=x_smooth, y=bestLine(x_smooth), name="SMOOTH PERSON LINE (POOR FIT)"))
             # POOR FIT RETURN
-            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete)
+            return athlete_id, fig.to_dict(), bestLine, best_r2, min(x_athlete), max(x_athlete), performance_coordinates
 
     else:
         # NOT LONG ENOUGH RETURN
-        return athlete_id, fig.to_dict(), None, 10, min(x_athlete), max(x_athlete)
+        return athlete_id, fig.to_dict(), None, 10, min(x_athlete), max(x_athlete), None
 
 
 def concurrentClubs():
     start = datetime.now()
 
-    listofparam_age = [[club, clubFilter(listOfAthletes, club), athleteLines, 'age', clubsDF] for club in listOfClubs]
-    listofparam_date = [[club, clubFilter(listOfAthletes, club), athleteLines, 'dec_date', clubsDF] for club in
+    listofparam_age = [[club, clubFilter(listOfAthletes, club), athleteLines, 'age', clubsDF.loc[clubsDF['club'] == club]] for club in listOfClubs]
+    listofparam_date = [[club, clubFilter(listOfAthletes, club), athleteLines, 'dec_date', clubsDF[clubsDF['club'] == club]] for club in
                         listOfClubs]
 
     # Use one Pool for both tasks
-    with Pool(processes=16) as pool:
+    with Pool(processes=8) as pool:
         process_club_params('age', listofparam_age, pool)
         process_club_params('dec_date', listofparam_date, pool)
 
@@ -361,7 +370,7 @@ def calcClubConcurrent(club, athleteList, athleteLines, label, clubsDF_):
         x = []
         y = []
         for athlete in athleteList:
-            line, start_running, end_running = athleteLines[athlete][x_data]
+            line, start_running, end_running, raw = athleteLines[athlete][x_data]
             relations = clubsDF_[(clubsDF_['club'] == clubname) & (clubsDF_['athlete_id'] == athlete)]
             for _, relation in relations.iterrows():
                 # pprint.pprint(relation)

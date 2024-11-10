@@ -55,6 +55,18 @@ def groupImprovement(athleteList, label, start, end):
     avgimprovment = totalimprovment / athletecount
     print("Average improvment of group from age {} to {} is {}".format(start,end,avgimprovment))
 
+def lineimprovemtn(line, startvalue, endvalue):
+    print(line)
+    if line:
+        start = line(startvalue)
+        end = line(endvalue)
+        improvement = (end - start) / start * 100
+        return improvement
+    else:
+        return 0
+
+
+
 
 if __name__ == '__main__':
     athlete_data, calced_data = calc_data.calcedData()
@@ -72,8 +84,8 @@ if __name__ == '__main__':
     groupImprovement(clubFilter(listOfAthletes, 'Loughborough Students'), 'age', 18.5, 22)
 
     print("BIRMINGHAM UNI (group Line)")
-    groupImprovement(clubLines['Birmingham Uni']['age'], 'age', 18.5,22)
+    lineimprovemtn(clubLines['Birmingham Uni']['age'], 18.5,22)
 
     print("LOUGHBOROUGH UNI (group Line)")
-    groupImprovement(clubLines['Loughborough Students']['age'], 'age', 18.5,22)
+    lineimprovemtn(clubLines['Loughborough Students']['age'], 18.5,22)
 
