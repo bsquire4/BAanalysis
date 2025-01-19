@@ -53,7 +53,7 @@ def create_groupGraph(inputList, x_data, chosenAthlete=None):
     for counter, athlete_id in enumerate(inputList):
         poly_function, minn, maxx, raw = athleteLines[athlete_id][x_data]
         myLine = np.linspace(minn, maxx, 50)
-        athlete_name = athleteInfo.loc[athlete_id]['full_name']
+        athlete_name = athleteInfo.loc[athlete_id]['full_name'] 
         customdata = [athlete_id] * len(myLine)
 
         if poly_function is not None:
@@ -209,7 +209,7 @@ def clubFilter(athleteList, searchClub):
 if __name__ == '__main__':
     # x_data = 'age'
     # athlete_data, calced_data = calc_data.calcedData()
-    #
+
     # listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF = athlete_data
     # athleteLines,athleteFigs, clubLines, groupLine = calced_data
 
@@ -219,6 +219,7 @@ if __name__ == '__main__':
 
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = Dash(__name__, external_stylesheets=external_stylesheets)
+    server = app.server
 
     app.layout = html.Div([
         dcc.Tabs([
@@ -250,15 +251,15 @@ if __name__ == '__main__':
                     dcc.Graph(id="everyoneGraph", figure=create_groupGraph(ageFilter(2000,2008, listOfAthletes, 'age'), 'age')),
                     dcc.Graph(id='athleteGraph')
                 ], style={'display': 'flex', 'justify-content': 'space-between'})]),
-            dcc.Tab(label='Clubs', children=[
-                html.Content([dcc.Dropdown(listOfClubs, id="allClubsDropdown", multi=True,
-                                           placeholder="Select Club(s) To View")], style={'flex-grow': '1'}),
-                html.Div([
-                    dcc.Graph(id='allClubGraph', figure=create_clubsGraph(listOfClubs, 'age')),
-                    dcc.Graph(id='indivClubGraph')
-                ], style={'display': 'flex', 'justify-content': 'space-between'})
-
-            ])
+            # dcc.Tab(label='Clubs', children=[
+            #     html.Content([dcc.Dropdown(listOfClubs, id="allClubsDropdown", multi=True,
+            #                                placeholder="Select Club(s) To View")], style={'flex-grow': '1'}),
+            #     html.Div([
+            #         dcc.Graph(id='allClubGraph', figure=create_clubsGraph(listOfClubs, 'age')),
+            #         dcc.Graph(id='indivClubGraph')
+            #     ], style={'display': 'flex', 'justify-content': 'space-between'})
+            #
+            # ])
         ])
     ])
 

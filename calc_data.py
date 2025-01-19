@@ -96,7 +96,6 @@ def create_GroupLine(x_data):
         x.extend(listOfDFs[athlete][x_data].to_numpy())
         y.extend(listOfDFs[athlete]['wa_points'].to_numpy())
 
-
     poly_function = calculateGroupBestFit(x, y)
 
     print("FINISHED MAKING GROUPLINE {}".format(datetime.now() - start))
@@ -185,14 +184,14 @@ def concurrentIndividual():
 
 
 def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
-    def find_closest_performances_conc_2(x_linspace, x, y):
+    def find_closest_performances_conc_2(x_linspace, x, y, option):
         x_linspace = np.asarray(x_linspace)
 
         def gaussian(x_gau, amp=1, mean=0, sigma=1):
             return amp * np.exp(-(x_gau - mean) ** 2 / (2 * sigma ** 2))
 
         def squewed_gaussian(x_gau, amp=1, mean=0, weight=1, sigma=1):
-            return amp * np.exp(-0.5 * ((x_gau - mean) / (weight + (sigma * (x_gau- mean)))) ** 2)
+            return amp * np.exp(-0.5 * ((x_gau - mean) / (weight + (sigma * (x_gau - mean)))) ** 2)
 
         def calc_weight_conc2(x_in, y_in):
             if len(x_in) > 0:
@@ -201,7 +200,8 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
                     w_min, w_max = np.min(w), np.max(w)
                     if w_min != w_max:
                         normalisation = (w - w_min) / (w_max - w_min)
-                        w = gaussian(normalisation, amp = 1, mean = 0, sigma = 0.4)
+                        w = gaussian(normalisation ** 2, amp=1, mean=0, sigma=0.4)
+
                     else:
                         w = np.ones_like(w)
                 else:
@@ -211,7 +211,28 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
             else:
                 print("EMPTY ARRAY CALLED")
 
-        performance_weights = calc_weight_conc2(x, y)
+        def calc_weight_conc(x_in, y_in):
+            if len(x_in) > 0:
+                w = group_line(x_in) - y_in
+                if w.size > 0:
+                    w_min, w_max = np.min(w), np.max(w)
+                    if w_min != w_max:
+                        normalisation = (w - w_min) / (w_max - w_min)
+                        w = gaussian(normalisation, amp=1, mean=0, sigma=0.4)
+
+                    else:
+                        w = np.ones_like(w)
+                else:
+                    w = np.array([])
+
+                return w
+            else:
+                print("EMPTY ARRAY CALLED")
+
+        if option is True:
+            performance_weights = calc_weight_conc2(x, y)
+        else:
+            performance_weights = calc_weight_conc(x,y)
 
         if performance_weights.size == 0:
             performance_weights = np.ones_like(x)  # Default to ones if empty
@@ -296,9 +317,14 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
             currentyear = (mdates.date2num(datetime.now()) / 365.25) + 1970
             x_smooth = np.linspace(min(x_athlete), currentyear, int((currentyear - min(x_athlete)) * 24))
 
-        y_smooth = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete)
+        y_smooth = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete, True)
         fig.add_trace(
             go.Scattergl(x=x_smooth, y=y_smooth, marker=dict(color='blue'), name="ROLLING AVERAGE 2")
+        )
+
+        y_smooth2 = find_closest_performances_conc_2(x_smooth, x_athlete, y_athlete, False)
+        fig.add_trace(
+            go.Scattergl(x=x_smooth, y=y_smooth2, marker=dict(color='red'), name="ROLLING AVERAGE")
         )
 
         x_train, x_test, y_train, y_test = train_test_split(x_smooth, y_smooth, random_state=101)
@@ -338,9 +364,12 @@ def calcIndivConcurrent(athlete_id, athleteDF, group_line, x_data):
 def concurrentClubs():
     start = datetime.now()
 
-    listofparam_age = [[club, clubFilter(listOfAthletes, club), athleteLines, 'age', clubsDF.loc[clubsDF['club'] == club]] for club in listOfClubs]
-    listofparam_date = [[club, clubFilter(listOfAthletes, club), athleteLines, 'dec_date', clubsDF[clubsDF['club'] == club]] for club in
-                        listOfClubs]
+    listofparam_age = [
+        [club, clubFilter(listOfAthletes, club), athleteLines, 'age', clubsDF.loc[clubsDF['club'] == club]] for club in
+        listOfClubs]
+    listofparam_date = [
+        [club, clubFilter(listOfAthletes, club), athleteLines, 'dec_date', clubsDF[clubsDF['club'] == club]] for club in
+        listOfClubs]
 
     # Use one Pool for both tasks
     with Pool(processes=8) as pool:
@@ -434,8 +463,8 @@ def calcedData():
     global groupLine
     groupLine = create_GroupLine('age')
     concurrentIndividual()
-    concurrentClubs()
+    # concurrentClubs()
     groupLine = create_GroupLine2(listOfAthletes, 'age')
 
     return (listOfAthletes, listOfDFs, listOfClubs, athleteInfo, clubsDF), (
-    athleteLines, athleteFigs, clubLines, groupLine),
+        athleteLines, athleteFigs, clubLines, groupLine),
